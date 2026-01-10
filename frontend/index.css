@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@theme {
+    /* Dark Mode Palette - Modern Slate/Navy */
+    --color-base-100: #1e293b;
+    /* Slate 800 - Cards/Backgrounds */
+    --color-base-200: #0f172a;
+    /* Slate 900 - Main Background */
+    --color-base-300: #020617;
+    /* Slate 950 - Deepest Background */
+    --color-base-content: #f8fafc;
+    /* Slate 50 - Main Text */
+
+    /* Emerald Green Primary (Kept vibrant for dark mode) */
+    --color-primary: #10b981;
+    --color-primary-focus: #059669;
+    --color-primary-content: #ffffff;
+
+    /* Amber Secondary */
+    --color-secondary: #f59e0b;
+    --color-secondary-content: #ffffff;
+
+    /* Cyan Accent */
+    --color-accent: #06b6d4;
+    --color-accent-content: #ffffff;
+
+    --color-neutral: #1f2937;
+    /* Gray 800 */
+    --color-neutral-content: #ffffff;
+
+    --color-info: #3abff8;
+    --color-success: #36d399;
+    --color-warning: #fbbd23;
+    --color-error: #f87272;
+}
