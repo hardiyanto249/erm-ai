@@ -3,13 +3,14 @@ import ComplianceChecklist from './ComplianceChecklist';
 import AddComplianceItemModal from './AddComplianceItemModal';
 import { ComplianceItem } from '../types';
 import { authFetch } from '../utils/auth';
+import { API_BASE_URL } from '../utils/config';
 
 const ShariaCompliance: React.FC<{ lazId: number }> = ({ lazId }) => {
     const [items, setItems] = useState<ComplianceItem[]>([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
 
     useEffect(() => {
-        authFetch(`http://localhost:8080/api/compliance`)
+        authFetch(`${API_BASE_URL}/api/compliance`)
             .then(res => res.json())
             .then(data => setItems(data || []))
             .catch(err => console.error(err));
@@ -17,7 +18,7 @@ const ShariaCompliance: React.FC<{ lazId: number }> = ({ lazId }) => {
 
     const handleToggleItem = async (id: string) => {
         try {
-            const res = await authFetch(`http://localhost:8080/api/compliance?id=${id}`, { method: 'PUT' });
+            const res = await authFetch(`${API_BASE_URL}/api/compliance?id=${id}`, { method: 'PUT' });
             if (res.ok) {
                 setItems(items.map(item =>
                     item.id === id ? { ...item, completed: !item.completed } : item
@@ -35,7 +36,7 @@ const ShariaCompliance: React.FC<{ lazId: number }> = ({ lazId }) => {
             completed: false,
         };
         try {
-            const res = await authFetch(`http://localhost:8080/api/compliance`, {
+            const res = await authFetch(`${API_BASE_URL}/api/compliance`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(newItem)

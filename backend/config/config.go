@@ -12,7 +12,7 @@ type Config struct {
 func Load() *Config {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		apiKey = "AIzaSyAnlltJf_x3tZ7ElrNNVypVo4W9CeTEBrw"
+		apiKey = "AIzaSyDgySd7zNTASrSyp4ngvXwhDYC1fmkXPF8" // Fallback for MVP
 	}
 
 	return &Config{

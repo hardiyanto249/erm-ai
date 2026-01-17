@@ -5,12 +5,11 @@ import RiskTable from './RiskTable';
 import RiskCategoryChart from './RiskCategoryChart';
 import RiskTrendChart from './RiskTrendChart';
 import RiskMatrix from './RiskMatrix';
+import BenchmarkChart from './BenchmarkChart';
 import { RiskItem, Kpi, RiskCategory, RiskStatus, getCategoryDisplayName } from '../types';
 import { authFetch } from '../utils/auth';
+import { API_BASE_URL } from '../utils/config';
 import DataImportModal from './DataImportModal';
-
-const rhaGoodThreshold = 12.5;
-const acrGoodThreshold = 10;
 
 // Early Warning System (EWS) Component
 const EarlyWarningBanner: React.FC<{ messages: string[] }> = ({ messages }) => {
@@ -33,17 +32,23 @@ const EarlyWarningBanner: React.FC<{ messages: string[] }> = ({ messages }) => {
     );
 };
 
-
 interface DashboardProps {
     risks: RiskItem[];
     lazId: number;
+    isReadOnly?: boolean;
+    lazName?: string;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
+const Dashboard: React.FC<DashboardProps> = ({ risks, lazId, isReadOnly, lazName }) => {
+
     const [rhaValue, setRhaValue] = useState(0);
     const [acrValue, setAcrValue] = useState(0);
     const [avgMitigationDays, setAvgMitigationDays] = useState("12 days");
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+    // Dynamic Thresholds
+    const [rhaThreshold, setRhaThreshold] = useState(12.5);
+    const [acrThreshold, setAcrThreshold] = useState(10);
 
     // State for Anomaly Detection
     interface AnomalyData {
@@ -70,10 +75,13 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
         message: string;
     }
     const [predictions, setPredictions] = useState<PredictionData[]>([]);
+    const [benchmarkData, setBenchmarkData] = useState<{ avg_RHA: number, avg_ACR: number } | null>(null);
 
     useEffect(() => {
+        const getUrl = (endpoint: string) => lazId > 0 ? `${API_BASE_URL}${endpoint}?laz_id=${lazId}` : `${API_BASE_URL}${endpoint}`;
+
         const fetchMetrics = async () => {
-            const res = await authFetch(`http://localhost:8080/api/metrics`);
+            const res = await authFetch(getUrl('/api/metrics'));
             if (res.ok) {
                 const data = await res.json();
                 if (data.RHA !== undefined) setRhaValue(data.RHA);
@@ -81,9 +89,21 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
             }
         };
 
+        const fetchBenchmark = async () => {
+            try {
+                const res = await authFetch(getUrl('/api/analytics/benchmark'));
+                if (res.ok) {
+                    const data = await res.json();
+                    setBenchmarkData(data);
+                }
+            } catch (err) {
+                console.error("Error fetching benchmark:", err);
+            }
+        };
+
         const fetchAnomalies = async () => {
             try {
-                const res = await authFetch(`http://localhost:8080/api/analytics/anomaly`);
+                const res = await authFetch(getUrl('/api/analytics/anomaly'));
                 if (res.ok) {
                     const data = await res.json();
                     if (data.RHA) setRhaAnomaly(data.RHA);
@@ -96,7 +116,7 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
 
         const fetchPredictions = async () => {
             try {
-                const res = await authFetch(`http://localhost:8080/api/analytics/prediction`);
+                const res = await authFetch(getUrl('/api/analytics/prediction'));
                 if (res.ok) {
                     const data = await res.json();
                     if (Array.isArray(data)) {
@@ -110,9 +130,24 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
             }
         };
 
+        const fetchConfig = async () => {
+            try {
+                const res = await authFetch(`${API_BASE_URL}/api/config`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.rha_limit) setRhaThreshold(parseFloat(data.rha_limit));
+                    if (data.acr_limit) setAcrThreshold(parseFloat(data.acr_limit));
+                }
+            } catch (error) {
+                console.error("Error fetching config:", error);
+            }
+        };
+
         fetchMetrics();
+        fetchBenchmark();
         fetchAnomalies();
         fetchPredictions();
+        fetchConfig();
     }, [lazId]);
 
     const highPriorityRisks = risks.filter(risk => (risk.impact === 'Critical' || risk.impact === 'High') && risk.status === 'Open');
@@ -134,18 +169,18 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
 
     if (rhaAnomaly && rhaAnomaly.is_anomaly) {
         warningMessages.push(`⚠️ Anomaly RHA: ${rhaAnomaly.current_value.toFixed(1)}% (Normal: ${rhaAnomaly.threshold_lower.toFixed(1)}% - ${rhaAnomaly.threshold_upper.toFixed(1)}%). Deviation detected!`);
-    } else if (rhaValue > rhaGoodThreshold) {
-        warningMessages.push(`Rasio Hak Amil (RHA) (${rhaValue.toFixed(1)}%) melebihi batas ideal (${rhaGoodThreshold}%).`);
+    } else if (rhaValue > rhaThreshold) {
+        warningMessages.push(`Rasio Hak Amil (RHA) (${rhaValue.toFixed(1)}%) melebihi batas ideal (${rhaThreshold}%).`);
     }
 
     if (acrAnomaly && acrAnomaly.is_anomaly) {
         warningMessages.push(`⚠️ Anomaly ACR: ${acrAnomaly.current_value.toFixed(1)}% (Normal: ${acrAnomaly.threshold_lower.toFixed(1)}% - ${acrAnomaly.threshold_upper.toFixed(1)}%). Unusual spike detected!`);
-    } else if (acrValue > acrGoodThreshold) {
-        warningMessages.push(`Saldo Kas Mengendap (ACR) (${acrValue.toFixed(1)}%) melebihi batas ideal (${acrGoodThreshold}%).`);
+    } else if (acrValue > acrThreshold) {
+        warningMessages.push(`Saldo Kas Mengendap (ACR) (${acrValue.toFixed(1)}%) melebihi batas ideal (${acrThreshold}%).`);
     }
 
     predictions.forEach(pred => {
-        const threshold = pred.target === 'RHA' ? rhaGoodThreshold : acrGoodThreshold;
+        const threshold = pred.target === 'RHA' ? rhaThreshold : acrThreshold;
         if (pred.predicted_value > threshold) {
             warningMessages.push(`🔮 PREDICTION: High ${pred.predictor} implies ${pred.target} may reach ${pred.predicted_value.toFixed(1)}% soon.`);
         }
@@ -173,15 +208,17 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
         <div className="space-y-8">
             <div className="flex justify-between items-center">
                 <h1 className="text-3xl font-bold text-base-content">Dashboard Overview</h1>
-                <button
-                    onClick={() => setIsImportModalOpen(true)}
-                    className="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                    </svg>
-                    Import Historical Data
-                </button>
+                {!isReadOnly && (
+                    <button
+                        onClick={() => setIsImportModalOpen(true)}
+                        className="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Import Historical Data
+                    </button>
+                )}
             </div>
 
             <EarlyWarningBanner messages={warningMessages} />
@@ -214,8 +251,8 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
                                         </div>
                                         <div>
                                             <p className="text-xs text-indigo-300 uppercase font-bold">Predicted {prediction.target}</p>
-                                            <p className={`text-2xl font-bold font-mono ${(prediction.target === 'RHA' && prediction.predicted_value > rhaGoodThreshold) ||
-                                                (prediction.target === 'ACR' && prediction.predicted_value > acrGoodThreshold)
+                                            <p className={`text-2xl font-bold font-mono ${(prediction.target === 'RHA' && prediction.predicted_value > rhaThreshold) ||
+                                                (prediction.target === 'ACR' && prediction.predicted_value > acrThreshold)
                                                 ? 'text-red-400' : 'text-emerald-400'
                                                 }`}>
                                                 {prediction.predicted_value.toFixed(1)}%
@@ -244,7 +281,7 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
                                 maxValue={25}
                                 label="Rasio Hak Amil (RHA)"
                                 unit="%"
-                                goodThreshold={rhaGoodThreshold}
+                                goodThreshold={rhaThreshold}
                                 warningThreshold={15}
                             />
                             {rhaAnomaly && (
@@ -260,7 +297,7 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
                                 maxValue={20}
                                 label="Saldo Kas Mengendap (ACR)"
                                 unit="%"
-                                goodThreshold={acrGoodThreshold}
+                                goodThreshold={acrThreshold}
                                 warningThreshold={15}
                             />
                             {acrAnomaly && (
@@ -275,7 +312,7 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
                 <div className="bg-base-100 p-6 rounded-xl shadow-lg flex flex-col">
                     <h3 className="text-xl font-semibold text-white mb-4">High Priority Risks</h3>
                     <p className="text-sm text-base-content mb-4">Risks requiring immediate attention.</p>
-                    <div className="flex-grow overflow-y-auto">
+                    <div className="overflow-y-auto h-60 w-full scrollbar-thin scrollbar-thumb-base-300 scrollbar-track-base-100">
                         <RiskTable risks={highPriorityRisks} isCompact={true} />
                     </div>
                 </div>
@@ -283,8 +320,18 @@ const Dashboard: React.FC<DashboardProps> = ({ risks, lazId }) => {
 
             <div className="mb-6">
                 {/* RiskTrendChart is self-contained grid now */}
-                <RiskTrendChart />
+                <RiskTrendChart lazId={lazId} />
             </div>
+
+            {benchmarkData && (
+                <BenchmarkChart
+                    myRHA={rhaValue}
+                    marketRHA={benchmarkData.avg_RHA}
+                    myACR={acrValue}
+                    marketACR={benchmarkData.avg_ACR}
+                    lazName={lazName}
+                />
+            )}
 
             <div className="bg-base-100 p-6 rounded-xl shadow-lg">
                 <RiskMatrix risks={risks} />

@@ -21,7 +21,9 @@ func GetAnomalyCheck(w http.ResponseWriter, r *http.Request) {
 
 	lazID := getLazID(r)
 	if lazID == 0 {
-		http.Error(w, "LAZ ID required", http.StatusBadRequest)
+		// Admin Console viewing nothing
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
 		return
 	}
 
@@ -105,10 +107,22 @@ func runPredictionHelper(lazID int, targetName string, excludedMetrics []string)
 		return false
 	}
 
-	// Identify Predictors: All metrics EXCEPT the target AND excluded ones
+	// 0. Get Allowed Predictors from Metadata
+	allowedPredictors := make(map[string]bool)
+	pmRows, err := db.DB.Query("SELECT name FROM metrics WHERE laz_id=$1 AND is_predictor=true", lazID)
+	if err == nil {
+		defer pmRows.Close()
+		for pmRows.Next() {
+			var n string
+			pmRows.Scan(&n)
+			allowedPredictors[n] = true
+		}
+	}
+
+	// Identify Predictors: All metrics EXCEPT the target AND excluded ones AND must be allowed
 	var predictors []string
 	for m := range allMetrics {
-		if !isExcluded(m) {
+		if !isExcluded(m) && allowedPredictors[m] {
 			predictors = append(predictors, m)
 		}
 	}
@@ -159,10 +173,13 @@ func runPredictionHelper(lazID int, targetName string, excludedMetrics []string)
 	}
 
 	// Try Full Multivariate
+	var predictedVal, r2 float64
+	var coeffs []float64
+
 	finalPredictors := predictors
 	xData, yData, validRows = getRows(finalPredictors)
 
-	fmt.Printf("Prediction Debug: Target=%s, Candidates=%d, Feature Rows=%d\n", targetName, len(finalPredictors), validRows)
+	fmt.Printf("Prediction Debug: Target=%s, Candidates=%d, Names=%v, Feature Rows=%d\n", targetName, len(finalPredictors), finalPredictors, validRows)
 
 	// If Not enough rows (Underdetermined System), Fallback to BEST SINGLE PREDICTOR
 	if validRows < len(finalPredictors)+1 {
@@ -185,16 +202,76 @@ func runPredictionHelper(lazID int, targetName string, excludedMetrics []string)
 			finalPredictors = []string{bestP}
 			xData, yData, validRows = getRows(finalPredictors)
 		} else {
-			return nil // No suitable predictor found even as single
+			// Do NOT return nil here. Let it fall through to Time-Series.
+			fmt.Println("Dynamic Prediction: No single strong predictor found. Falling through to Time-Series.")
 		}
 	}
 
-	if validRows < len(finalPredictors)+1 { // Re-check after fallback
-		return nil
+	// If Not enough rows for Multivariate (or Single fallback failed), Try TIME-SERIES Prediction
+	if validRows < len(finalPredictors)+1 {
+		fmt.Printf("Dynamic Prediction Failed (Rows=%d). Attempting Time-Series Trend Fallback...\n", validRows)
+
+		// Build Time Series Data
+		var timeX, valY []float64
+		var lastDate time.Time
+
+		// Fetch only target history
+		tRows, err := db.DB.Query("SELECT value, recorded_at FROM metric_history WHERE laz_id=$1 AND metric_name=$2 ORDER BY recorded_at ASC", lazID, targetName)
+		if err == nil {
+			defer tRows.Close()
+			for tRows.Next() {
+				var v float64
+				var t time.Time
+				if err := tRows.Scan(&v, &t); err == nil {
+					timeX = append(timeX, float64(t.Unix())) // Use Unix timestamp as X
+					valY = append(valY, v)
+					lastDate = t
+				}
+			}
+		}
+
+		if len(timeX) > 1 {
+			// Simple Regression: Y = a + b*Time
+			slope, intercept, _ := utils.SimpleLinearRegression(timeX, valY)
+
+			// Predict for Next Month (approx 30 days from last record, or just "now" if data is old)
+			// User generally wants to know "Where is it heading?".
+			// If last record is today, predict next month.
+			targetTime := lastDate.AddDate(0, 1, 0).Unix() // Next Month
+			predictedVal = utils.PredictValueSimple(slope, intercept, float64(targetTime))
+
+			r2 = 0.5 // Dummy confidence for trend line? Or calculate? utils.Simple doesn't return R2 yet.
+
+			explanation := "Prediksi berbasis Tren Waktu (Time-Series) karena data prediktor eksternal belum lengkap/sinkron."
+
+			result := map[string]interface{}{
+				"model_type":      "Time-Series Trend",
+				"predictor":       "Time (Trend)",
+				"target":          targetName,
+				"correlation":     0.0, // Not applicable or low confidence
+				"current_input":   0,   // Time input doesn't make sense to show as currency
+				"predicted_value": predictedVal,
+				"message":         explanation,
+			}
+			return result
+		}
+
+		// return nil // Truly no data
+		explanation := "Data historis tidak cukup (butuh min. 2 periode)."
+		result := map[string]interface{}{
+			"model_type":      "Insufficient Data",
+			"predictor":       "-",
+			"target":          targetName,
+			"correlation":     0.0,
+			"current_input":   0,
+			"predicted_value": 0,
+			"message":         explanation,
+		}
+		return result
 	}
 
 	// Run Regression
-	coeffs, r2 := utils.MultivariateLinearRegression(yData, xData, validRows, len(finalPredictors))
+	coeffs, r2 = utils.MultivariateLinearRegression(yData, xData, validRows, len(finalPredictors))
 
 	// Predict using LATEST available inputs
 	var currentInputs []float64
@@ -211,12 +288,14 @@ func runPredictionHelper(lazID int, targetName string, excludedMetrics []string)
 		currentInputs = append(currentInputs, foundVal)
 	}
 
-	predictedVal := utils.PredictValueMultivariate(coeffs, currentInputs)
+	predictedVal = utils.PredictValueMultivariate(coeffs, currentInputs)
 
 	// Formatting response
 	predictorDisplay := strings.Join(finalPredictors, " + ")
-	if len(finalPredictors) > 3 {
-		predictorDisplay = fmt.Sprintf("%d Variables", len(finalPredictors))
+
+	explanation := fmt.Sprintf("Model multivariat menganalisis %d variabel prediktor sekaligus.", len(finalPredictors))
+	if len(finalPredictors) < len(predictors) {
+		explanation = fmt.Sprintf("Data historis terbatas (%d record). Sistem mensimplifikasi model menggunakan 1 prediktor paling dominan (%s) untuk akurasi terbaik.", validRows, predictorDisplay)
 	}
 
 	result := map[string]interface{}{
@@ -224,9 +303,10 @@ func runPredictionHelper(lazID int, targetName string, excludedMetrics []string)
 		"predictor":       predictorDisplay,
 		"target":          targetName,
 		"correlation":     r2,
-		"current_input":   currentInputs[0], // Representative
+		"current_input":   currentInputs[0], // Representative value
 		"predicted_value": predictedVal,
-		"message":         fmt.Sprintf("Dynamic model using %s. Based on %d records.", predictorDisplay, validRows),
+		"coefficients":    coeffs,
+		"message":         explanation,
 	}
 
 	return result
@@ -269,7 +349,8 @@ func GetMetricTrends(w http.ResponseWriter, r *http.Request) {
 
 	lazID := getLazID(r)
 	if lazID == 0 {
-		http.Error(w, "LAZ ID required", http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("[]"))
 		return
 	}
 
@@ -319,6 +400,62 @@ func GetMetricTrends(w http.ResponseWriter, r *http.Request) {
 			rec["ACR"] = v
 		}
 		result = append(result, rec)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// GetBenchmarkMetrics calculates the average RHA and ACR of all OTHER LAZs (market avg)
+func GetBenchmarkMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	lazID := getLazID(r)
+	if lazID == 0 {
+		// Return 0s so chart is just empty
+		result := map[string]float64{"avg_RHA": 0, "avg_ACR": 0}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+		return
+	}
+
+	// Query Average RHA and ACR excluding current LAZ AND Disabled LAZs
+	query := `
+		SELECT m.name, AVG(m.value)
+		FROM metrics m
+		JOIN laz_partners l ON m.laz_id = l.id
+		WHERE m.laz_id != $1 
+		  AND m.name IN ('RHA', 'ACR')
+		  AND COALESCE(l.is_active, TRUE) = TRUE
+		GROUP BY m.name
+	`
+	rows, err := db.DB.Query(query, lazID)
+	if err != nil {
+		fmt.Println("Benchmark Error:", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	result := map[string]float64{
+		"avg_RHA": 0,
+		"avg_ACR": 0,
+	}
+
+	for rows.Next() {
+		var name string
+		var val float64
+		if err := rows.Scan(&name, &val); err == nil {
+			if name == "RHA" {
+				result["avg_RHA"] = val
+			}
+			if name == "ACR" {
+				result["avg_ACR"] = val
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

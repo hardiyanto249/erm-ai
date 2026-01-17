@@ -43,12 +43,14 @@ func main() {
 	db.SeedExtendedData()
 	db.SeedMetrics()
 	db.SeedHistoryIfEmpty()
-	db.SeedLeadingIndicators() // Add this
+	db.SeedLeadingIndicators()
+	db.SeedAdmin() // Initialize Default Admin
 
 	mux := http.NewServeMux()
 
 	// Public Routes
-	mux.HandleFunc("/api/auth/register", handlers.RegisterLaz)
+	mux.HandleFunc("/api/auth/register", handlers.RegisterLazAndAdmin)
+	mux.HandleFunc("/api/auth/login", handlers.Login)
 
 	// Protected Routes (Wrapped in Middleware)
 	// Note: For now we apply middleware locally or global?
@@ -60,7 +62,11 @@ func main() {
 	}
 
 	mux.HandleFunc("/api/metrics", protected(handlers.GetMetrics))
-	mux.HandleFunc("/api/lazs", handlers.GetLazPartners) // Public to see list? Or protected? Let's keep public for drop down login
+	mux.HandleFunc("/api/lazs", handlers.GetLazPartners)                      // Public to see list? Or protected? Let's keep public for drop down login
+	mux.HandleFunc("/api/admin/lazs", protected(handlers.GetAllLazsForAdmin)) // Protected Admin Route to see All
+	mux.HandleFunc("/api/lazs/toggle-status", protected(handlers.ToggleLazStatus))
+	mux.HandleFunc("/api/config", protected(handlers.GetAppConfigHandler))
+	mux.HandleFunc("/api/admin/config/update", protected(handlers.UpdateAppConfigHandler))
 
 	mux.HandleFunc("/api/compliance", protected(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -79,6 +85,7 @@ func main() {
 	mux.HandleFunc("/api/analytics/anomaly", protected(handlers.GetAnomalyCheck))             // New Endpoint
 	mux.HandleFunc("/api/analytics/prediction", protected(handlers.GetPredictiveAnalysis))    // Model B Endpoint
 	mux.HandleFunc("/api/analytics/trends", protected(handlers.GetMetricTrends))              // NEW: Metric Trends (5 Years)
+	mux.HandleFunc("/api/analytics/benchmark", protected(handlers.GetBenchmarkMetrics))       // NEW: Benchmark Avg
 	mux.HandleFunc("/api/analytics/upload-history", protected(handlers.ImportHistoricalData)) // NEW: Upload History
 	mux.HandleFunc("/api/generate-risks", protected(handlers.GenerateRisks))                  // NEW: AI Risk Gen
 	mux.HandleFunc("/api/reports/risk-register", protected(handlers.GenerateRiskReport))      // NEW: PDF Report
@@ -101,7 +108,7 @@ func main() {
 
 	// CORS
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"},
+		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE"},
 		AllowedHeaders:   []string{"Content-Type", "X-LAZ-Token"}, // Add X-LAZ-Token
 		AllowCredentials: true,

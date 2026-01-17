@@ -18,8 +18,9 @@ import (
 )
 
 type GeminiService struct {
-	ctx    context.Context
-	client *genai.Client
+	ctx       context.Context
+	client    *genai.Client
+	ModelName string
 }
 
 type PromptData struct {
@@ -34,19 +35,52 @@ func NewGeminiService(cfg *config.Config) (*GeminiService, error) {
 		return nil, err
 	}
 
-	// DEBUG: List available models to console
+	// Auto-detect best available model
+	var selectedModel string
 	iter := client.ListModels(ctx)
-	fmt.Println("🔍 DEBUG: Available Gemini Models for this Key:")
+	fmt.Println("🔍 DEBUG: Scanning available Gemini Models...")
 	for {
 		m, err := iter.Next()
 		if err != nil {
 			break
 		}
-		fmt.Printf(" - %s (Supported: %v)\n", m.Name, m.SupportedGenerationMethods)
+		// fmt.Printf(" - Found: %s\n", m.Name)
+
+		// Check if supports generateContent
+		supportsGenerate := false
+		for _, method := range m.SupportedGenerationMethods {
+			if method == "generateContent" {
+				supportsGenerate = true
+				break
+			}
+		}
+
+		if supportsGenerate {
+			// Prioritize Flash or Pro
+			if strings.Contains(m.Name, "flash") {
+				selectedModel = m.Name
+			} else if strings.Contains(m.Name, "pro") && !strings.Contains(selectedModel, "flash") {
+				selectedModel = m.Name
+			} else if selectedModel == "" {
+				selectedModel = m.Name // Fallback to any generateContent model
+			}
+		}
+	}
+
+	// Clean up model name (remove "models/" prefix if present, though library handles it generally,
+	// GenerativeModel expects name like "gemini-pro" or "models/gemini-pro")
+	if selectedModel == "" {
+		fmt.Println("⚠️ Warning: No suitable Gemini model found during scan. Defaulting to 'gemini-pro'")
+		selectedModel = "gemini-pro"
+	} else {
+		// client.GenerativeModel prefers just the name often, but let's keep what ListModels returns
+		// ListModels returns "models/gemini-pro".
+		// client.GenerativeModel handles "models/" prefix fine.
+		fmt.Printf("✅ Selected AI Model: %s\n", selectedModel)
 	}
 	fmt.Println("-------------------------------------------")
 
-	return &GeminiService{ctx: ctx, client: client}, nil
+	return &GeminiService{ctx: ctx, client: client, ModelName: selectedModel}, nil
 }
 
 func (s *GeminiService) GenerateRisks(lazID int, eventType string, promptCfg *config.PromptConfig) ([]models.GeneratedRisk, error) {
@@ -54,8 +88,8 @@ func (s *GeminiService) GenerateRisks(lazID int, eventType string, promptCfg *co
 		return nil, fmt.Errorf("prompt configuration is missing or empty")
 	}
 
-	// Use "gemini-2.5-flash" as it is available for this API Key
-	model := s.client.GenerativeModel("gemini-2.5-flash")
+	// Use dynamically selected model
+	model := s.client.GenerativeModel(s.ModelName)
 
 	// Set system instruction
 	if promptCfg.SystemInstruction != "" {
@@ -121,13 +155,23 @@ func (s *GeminiService) GenerateRisks(lazID int, eventType string, promptCfg *co
 	}
 
 	// Clean Markdown code blocks
-	responseText = strings.TrimPrefix(responseText, "```json")
-	responseText = strings.TrimSuffix(responseText, "```")
+	// Robust cleanup for "```json", "```", and surrounding whitespace/newlines
+	responseText = strings.TrimSpace(responseText)
+	if strings.HasPrefix(responseText, "```json") {
+		responseText = strings.TrimPrefix(responseText, "```json")
+	} else if strings.HasPrefix(responseText, "```") {
+		responseText = strings.TrimPrefix(responseText, "```")
+	}
+	if strings.HasSuffix(responseText, "```") {
+		responseText = strings.TrimSuffix(responseText, "```")
+	}
 	responseText = strings.TrimSpace(responseText)
 
 	var risks []models.GeneratedRisk
 	if err := json.Unmarshal([]byte(responseText), &risks); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON: %v. Raw text: %s", err, responseText)
+		fmt.Printf("❌ JSON Parse Error: %v\nRaw Text: %s\n", err, responseText)
+		// Check if the response was just a refusal or plain text
+		return nil, fmt.Errorf("failed to parse JSON from AI response: %v", err)
 	}
 
 	return risks, nil

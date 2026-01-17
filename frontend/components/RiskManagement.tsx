@@ -4,6 +4,7 @@ import RiskTable from './RiskTable';
 import { RiskItem } from '../types';
 
 import { authFetch } from '../utils/auth';
+import { API_BASE_URL } from '../utils/config';
 
 interface RiskManagementProps {
     risks: RiskItem[];
@@ -11,12 +12,13 @@ interface RiskManagementProps {
     onEditRisk: (risk: RiskItem) => void;
     onDeleteRisk: (riskId: string) => void;
     onMitigateRisk: (risk: RiskItem) => void;
+    isReadOnly?: boolean;
 }
 
-const RiskManagement: React.FC<RiskManagementProps> = ({ risks, onLogNewRisk, onEditRisk, onDeleteRisk, onMitigateRisk }) => {
+const RiskManagement: React.FC<RiskManagementProps> = ({ risks, onLogNewRisk, onEditRisk, onDeleteRisk, onMitigateRisk, isReadOnly }) => {
     const handleDownloadReport = async () => {
         try {
-            const res = await authFetch('http://localhost:8080/api/reports/risk-register');
+            const res = await authFetch(`${API_BASE_URL}/api/reports/risk-register`);
             if (!res.ok) throw new Error("Download failed");
             const blob = await res.blob();
             const url = window.URL.createObjectURL(blob);
@@ -46,19 +48,27 @@ const RiskManagement: React.FC<RiskManagementProps> = ({ risks, onLogNewRisk, on
                         </svg>
                         Download PDF
                     </button>
-                    <button
-                        onClick={onLogNewRisk}
-                        className="px-4 py-2 bg-primary text-white font-semibold rounded-lg hover:bg-opacity-80 transition-colors"
-                    >
-                        Log New Risk
-                    </button>
+                    {!isReadOnly && (
+                        <button
+                            onClick={onLogNewRisk}
+                            className="px-4 py-2 bg-primary text-white font-semibold rounded-lg hover:bg-opacity-80 transition-colors"
+                        >
+                            Log New Risk
+                        </button>
+                    )}
                 </div>
             </div>
             <p className="text-base-content">
                 This register contains all identified risks across the organization, categorized by type, impact, and likelihood.
             </p>
             <div className="bg-base-100 p-4 rounded-xl shadow-lg">
-                <RiskTable risks={risks} onEdit={onEditRisk} onDelete={onDeleteRisk} onMitigate={onMitigateRisk} />
+                <RiskTable
+                    risks={risks}
+                    onEdit={onEditRisk}
+                    onDelete={isReadOnly ? undefined : onDeleteRisk}
+                    onMitigate={isReadOnly ? undefined : onMitigateRisk}
+                    isReadOnly={isReadOnly}
+                />
             </div>
         </div>
     );

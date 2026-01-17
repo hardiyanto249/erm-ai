@@ -31,6 +31,12 @@ const MitigationModal: React.FC<MitigationModalProps> = ({ risk, onClose, onSave
                     <div className="bg-base-200 p-3 rounded mb-4">
                         <p className="text-xs font-bold text-indigo-300 uppercase">Risk Description</p>
                         <p className="text-sm text-gray-300">{risk.description}</p>
+                        {risk.context && (
+                            <>
+                                <p className="text-xs font-bold text-indigo-300 uppercase mt-2">Context / Project</p>
+                                <p className="text-sm text-gray-300">{risk.context}</p>
+                            </>
+                        )}
                     </div>
 
                     <div>

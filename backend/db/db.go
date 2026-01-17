@@ -8,6 +8,7 @@ import (
 	"backend/models"
 
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var DB *sql.DB
@@ -43,7 +44,16 @@ func CreateTables() {
 		impact VARCHAR(20),
 		likelihood VARCHAR(20),
 		status VARCHAR(20),
+		context VARCHAR(100), -- New Context/Project Field
 		PRIMARY KEY (id, laz_id)
+	);
+
+	CREATE TABLE IF NOT EXISTS users (
+		id SERIAL PRIMARY KEY,
+		laz_id INT DEFAULT 0,
+		email VARCHAR(100) UNIQUE,
+		password_hash VARCHAR(255),
+		role VARCHAR(20) DEFAULT 'Staff'
 	);
 	
 	CREATE TABLE IF NOT EXISTS metrics (
@@ -115,6 +125,105 @@ func ensureSchemaUpdates() {
 			}
 		}
 	}
+
+	// 4. Add Context field
+	var ctxExists bool
+	ctxQuery := "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='risks' AND column_name='context')"
+	err = DB.QueryRow(ctxQuery).Scan(&ctxExists)
+	if err == nil && !ctxExists {
+		_, err := DB.Exec("ALTER TABLE risks ADD COLUMN context VARCHAR(100)")
+		if err != nil {
+			log.Println("Error adding context column:", err)
+		} else {
+			fmt.Println("Migrated: Added context to risks")
+		}
+	}
+	// 5. Add created_at field
+	var createdAtExists bool
+	createdAtQuery := "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='risks' AND column_name='created_at')"
+	err = DB.QueryRow(createdAtQuery).Scan(&createdAtExists)
+	if err == nil && !createdAtExists {
+		_, err := DB.Exec("ALTER TABLE risks ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+		if err != nil {
+			log.Println("Error adding created_at column:", err)
+		} else {
+			fmt.Println("Migrated: Added created_at to risks")
+		}
+	}
+
+	// 6. Add is_predictor field to metrics
+	var isPredExists bool
+	isPredQuery := "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='metrics' AND column_name='is_predictor')"
+	err = DB.QueryRow(isPredQuery).Scan(&isPredExists)
+	if err == nil && !isPredExists {
+		_, err := DB.Exec("ALTER TABLE metrics ADD COLUMN is_predictor BOOLEAN DEFAULT TRUE")
+		if err != nil {
+			log.Println("Error adding is_predictor column:", err)
+		} else {
+			fmt.Println("Migrated: Added is_predictor to metrics")
+		}
+	}
+
+	// 7. Add is_active field to laz_partners
+	var isActiveExists bool
+	isActiveQuery := "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='laz_partners' AND column_name='is_active')"
+	err = DB.QueryRow(isActiveQuery).Scan(&isActiveExists)
+	if err == nil && !isActiveExists {
+		_, err := DB.Exec("ALTER TABLE laz_partners ADD COLUMN is_active BOOLEAN DEFAULT TRUE")
+		if err != nil {
+			log.Println("Error adding is_active column:", err)
+		} else {
+			fmt.Println("Migrated: Added is_active to laz_partners")
+		}
+	}
+	// 8. Add app_config table
+	_, err = DB.Exec(`CREATE TABLE IF NOT EXISTS app_config (
+		key VARCHAR(50) PRIMARY KEY,
+		value VARCHAR(255)
+	)`)
+	if err != nil {
+		log.Println("Error creating app_config table:", err)
+	}
+
+	// Seed default config if empty
+	var countConfig int
+	DB.QueryRow("SELECT COUNT(*) FROM app_config").Scan(&countConfig)
+	if countConfig == 0 {
+		DB.Exec("INSERT INTO app_config (key, value) VALUES ('rha_limit', '12.5'), ('acr_limit', '10')")
+		fmt.Println("Seeded default app_config")
+	}
+}
+
+// Config Functions
+func GetAppConfig() (map[string]string, error) {
+	rows, err := DB.Query("SELECT key, value FROM app_config")
+	if err != nil {
+		// If table doesn't exist yet (very first run edge case), return defaults
+		return map[string]string{"rha_limit": "12.5", "acr_limit": "10"}, nil
+	}
+	defer rows.Close()
+
+	config := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err == nil {
+			config[k] = v
+		}
+	}
+	// Ensure defaults if missing
+	if _, ok := config["rha_limit"]; !ok {
+		config["rha_limit"] = "12.5"
+	}
+	if _, ok := config["acr_limit"]; !ok {
+		config["acr_limit"] = "10"
+	}
+
+	return config, nil
+}
+
+func UpdateAppConfig(key, value string) error {
+	_, err := DB.Exec("INSERT INTO app_config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2", key, value)
+	return err
 }
 
 func SeedRisks() {
@@ -214,7 +323,7 @@ func GetMetrics(lazID int) ([]models.Metric, error) {
 }
 
 func GetRisks(lazID int) ([]models.Risk, error) {
-	rows, err := DB.Query("SELECT id, description, category, impact, likelihood, status, COALESCE(mitigation_plan, ''), COALESCE(mitigation_status, 'Planned'), COALESCE(mitigation_progress, 0) FROM risks WHERE laz_id=$1", lazID)
+	rows, err := DB.Query("SELECT id, description, category, impact, likelihood, status, COALESCE(mitigation_plan, ''), COALESCE(mitigation_status, 'Planned'), COALESCE(mitigation_progress, 0), COALESCE(context, ''), COALESCE(to_char(created_at, 'YYYY-MM-DD HH24:MI:SS'), '') FROM risks WHERE laz_id=$1 ORDER BY created_at DESC", lazID)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +332,7 @@ func GetRisks(lazID int) ([]models.Risk, error) {
 	var risks []models.Risk
 	for rows.Next() {
 		var r models.Risk
-		if err := rows.Scan(&r.ID, &r.Description, &r.Category, &r.Impact, &r.Likelihood, &r.Status, &r.MitigationPlan, &r.MitigationStatus, &r.MitigationProgress); err != nil {
+		if err := rows.Scan(&r.ID, &r.Description, &r.Category, &r.Impact, &r.Likelihood, &r.Status, &r.MitigationPlan, &r.MitigationStatus, &r.MitigationProgress, &r.Context, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		r.LazID = lazID
@@ -233,14 +342,14 @@ func GetRisks(lazID int) ([]models.Risk, error) {
 }
 
 func CreateRisk(risk models.Risk) error {
-	query := `INSERT INTO risks (id, laz_id, description, category, impact, likelihood, status, mitigation_plan, mitigation_status, mitigation_progress) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
-	_, err := DB.Exec(query, risk.ID, risk.LazID, risk.Description, risk.Category, risk.Impact, risk.Likelihood, risk.Status, risk.MitigationPlan, risk.MitigationStatus, risk.MitigationProgress)
+	query := `INSERT INTO risks (id, laz_id, description, category, impact, likelihood, status, mitigation_plan, mitigation_status, mitigation_progress, context) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+	_, err := DB.Exec(query, risk.ID, risk.LazID, risk.Description, risk.Category, risk.Impact, risk.Likelihood, risk.Status, risk.MitigationPlan, risk.MitigationStatus, risk.MitigationProgress, risk.Context)
 	return err
 }
 
 func UpdateRisk(risk models.Risk) error {
-	query := `UPDATE risks SET description=$1, category=$2, impact=$3, likelihood=$4, status=$5, mitigation_plan=$6, mitigation_status=$7, mitigation_progress=$8 WHERE id=$9 AND laz_id=$10`
-	_, err := DB.Exec(query, risk.Description, risk.Category, risk.Impact, risk.Likelihood, risk.Status, risk.MitigationPlan, risk.MitigationStatus, risk.MitigationProgress, risk.ID, risk.LazID)
+	query := `UPDATE risks SET description=$1, category=$2, impact=$3, likelihood=$4, status=$5, mitigation_plan=$6, mitigation_status=$7, mitigation_progress=$8, context=$9 WHERE id=$10 AND laz_id=$11`
+	_, err := DB.Exec(query, risk.Description, risk.Category, risk.Impact, risk.Likelihood, risk.Status, risk.MitigationPlan, risk.MitigationStatus, risk.MitigationProgress, risk.Context, risk.ID, risk.LazID)
 	return err
 }
 
@@ -524,7 +633,7 @@ func GetLazIDByToken(tokenHash string) (int, error) {
 }
 
 func GetLazPartners() ([]models.LazPartner, error) {
-	rows, err := DB.Query("SELECT id, name, scale, description FROM laz_partners ORDER BY id")
+	rows, err := DB.Query("SELECT id, name, scale, description, COALESCE(is_active, TRUE) FROM laz_partners WHERE COALESCE(is_active, TRUE) = TRUE ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -532,7 +641,22 @@ func GetLazPartners() ([]models.LazPartner, error) {
 	var partners []models.LazPartner
 	for rows.Next() {
 		var p models.LazPartner
-		rows.Scan(&p.ID, &p.Name, &p.Scale, &p.Description)
+		rows.Scan(&p.ID, &p.Name, &p.Scale, &p.Description, &p.IsActive)
+		partners = append(partners, p)
+	}
+	return partners, nil
+}
+
+func GetAllLazPartners() ([]models.LazPartner, error) {
+	rows, err := DB.Query("SELECT id, name, scale, description, COALESCE(is_active, TRUE) FROM laz_partners ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var partners []models.LazPartner
+	for rows.Next() {
+		var p models.LazPartner
+		rows.Scan(&p.ID, &p.Name, &p.Scale, &p.Description, &p.IsActive)
 		partners = append(partners, p)
 	}
 	return partners, nil
@@ -604,9 +728,58 @@ func GetZisData(lazID int) (models.ZisData, error) {
 	return data, nil
 }
 
-func CreateLazPartner(name, scale, description, tokenHash string) (int, error) {
+func CreateLazPartner(name, scale, description string) (int, error) {
+	// Removed token logic for LAZ
 	var id int
-	err := DB.QueryRow("INSERT INTO laz_partners (name, scale, description, api_token_hash) VALUES ($1, $2, $3, $4) RETURNING id",
-		name, scale, description, tokenHash).Scan(&id)
+	err := DB.QueryRow("INSERT INTO laz_partners (name, scale, description) VALUES ($1, $2, $3) RETURNING id",
+		name, scale, description).Scan(&id)
 	return id, err
+}
+
+// USER & AUTH DB FUNCTIONS
+
+func CreateUser(email, hashedPassword, role string, lazID int) error {
+	_, err := DB.Exec("INSERT INTO users (email, password_hash, role, laz_id) VALUES ($1, $2, $3, $4)", email, hashedPassword, role, lazID)
+	return err
+}
+
+func GetUserByEmail(email string) (models.User, error) {
+	var u models.User
+	err := DB.QueryRow("SELECT id, laz_id, email, password_hash, role FROM users WHERE email=$1", email).
+		Scan(&u.ID, &u.LazID, &u.Email, &u.PasswordHash, &u.Role)
+	return u, err
+}
+
+func GetLazByID(id int) (models.LazPartner, error) {
+	var p models.LazPartner
+	err := DB.QueryRow("SELECT id, name, scale, description, COALESCE(is_active, TRUE) FROM laz_partners WHERE id=$1", id).
+		Scan(&p.ID, &p.Name, &p.Scale, &p.Description, &p.IsActive)
+	return p, err
+}
+
+func UpdateLazStatus(id int, isActive bool) error {
+	_, err := DB.Exec("UPDATE laz_partners SET is_active=$1 WHERE id=$2", isActive, id)
+	return err
+}
+
+// Seeding Default Admin
+func SeedAdmin() {
+	var exists bool
+	DB.QueryRow("SELECT exists(SELECT 1 FROM users WHERE role='Admin')").Scan(&exists)
+	if !exists {
+		// Default Admin: admin@erm.com / admin123
+		// Generated using bcrypt cost 10
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
+		if err != nil {
+			log.Println("Error hashing admin password:", err)
+			return
+		}
+
+		_, err = DB.Exec("INSERT INTO users (email, password_hash, role, laz_id) VALUES ($1, $2, $3, $4)", "admin@erm.com", string(hashedPassword), "Admin", 0)
+		if err != nil {
+			log.Println("Error seeding admin:", err)
+		} else {
+			fmt.Println("Seeded Default Admin: admin@erm.com / admin123")
+		}
+	}
 }

@@ -1,15 +1,41 @@
 import React, { useEffect, useState } from 'react';
 import { ResponsiveContainer, LineChart, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Line, ReferenceLine } from 'recharts';
 import { getAuthToken } from '../utils/auth';
+import { API_BASE_URL } from '../utils/config';
 
-const RiskTrendChart: React.FC = () => {
+interface RiskTrendChartProps {
+    lazId?: number;
+}
+
+const RiskTrendChart: React.FC<RiskTrendChartProps> = ({ lazId }) => {
     const [data, setData] = useState<any[]>([]);
+    const [rhaLimit, setRhaLimit] = useState(12.5);
+    const [acrLimit, setAcrLimit] = useState(10);
 
     useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const token = getAuthToken();
+                const res = await fetch(`${API_BASE_URL}/api/config`, {
+                    headers: { 'X-LAZ-Token': token || '' }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.rha_limit) setRhaLimit(parseFloat(data.rha_limit));
+                    if (data.acr_limit) setAcrLimit(parseFloat(data.acr_limit));
+                }
+            } catch (e) { console.error(e); }
+        };
+        fetchConfig();
+
         const fetchData = async () => {
             try {
                 const token = getAuthToken();
-                const res = await fetch('http://localhost:8080/api/analytics/trends', {
+                const url = (lazId && lazId > 0)
+                    ? `${API_BASE_URL}/api/analytics/trends?laz_id=${lazId}`
+                    : `${API_BASE_URL}/api/analytics/trends`;
+
+                const res = await fetch(url, {
                     headers: { 'X-LAZ-Token': token || '' }
                 });
                 if (res.ok) {
@@ -23,7 +49,7 @@ const RiskTrendChart: React.FC = () => {
             }
         };
         fetchData();
-    }, []);
+    }, [lazId]);
 
     // Helper for Reference Line Label
     const renderLabel = (props: any, text: string) => {
@@ -53,7 +79,7 @@ const RiskTrendChart: React.FC = () => {
                             />
                             <YAxis stroke="#a6adbb" allowDecimals={true} width={30} domain={[0, 'auto']} />
                             <Tooltip contentStyle={{ backgroundColor: '#191e24', borderColor: '#15191e', color: '#a6adbb' }} />
-                            <ReferenceLine y={12.5} stroke="red" strokeDasharray="3 3" label="Max 12.5%" />
+                            <ReferenceLine y={rhaLimit} stroke="red" strokeDasharray="3 3" label={`Max ${rhaLimit}%`} />
                             <Line type="monotone" dataKey="RHA" name="RHA (%)" stroke="#f87171" strokeWidth={3} dot={{ r: 4 }} />
                         </LineChart>
                     </ResponsiveContainer>
@@ -71,7 +97,7 @@ const RiskTrendChart: React.FC = () => {
                                 tickFormatter={(v) => v.substring(2)} />
                             <YAxis stroke="#a6adbb" allowDecimals={true} width={30} domain={[0, 'auto']} />
                             <Tooltip contentStyle={{ backgroundColor: '#191e24', borderColor: '#15191e', color: '#a6adbb' }} />
-                            <ReferenceLine y={10} stroke="red" strokeDasharray="3 3" label="Max 10%" />
+                            <ReferenceLine y={acrLimit} stroke="red" strokeDasharray="3 3" label={`Max ${acrLimit}%`} />
                             <Line type="monotone" dataKey="ACR" name="ACR (%)" stroke="#fbbf24" strokeWidth={3} dot={{ r: 4 }} />
                         </LineChart>
                     </ResponsiveContainer>

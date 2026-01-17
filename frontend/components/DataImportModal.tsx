@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { getAuthToken } from '../utils/auth';
+import { API_BASE_URL } from '../utils/config';
 
 interface DataImportModalProps {
     onClose: () => void;
@@ -32,7 +33,7 @@ const DataImportModal: React.FC<DataImportModalProps> = ({ onClose, onSuccess })
 
         try {
             const token = getAuthToken();
-            const res = await fetch('http://localhost:8080/api/analytics/upload-history', {
+            const res = await fetch(`${API_BASE_URL}/api/analytics/upload-history`, {
                 method: 'POST',
                 headers: {
                     'X-LAZ-Token': token || '',

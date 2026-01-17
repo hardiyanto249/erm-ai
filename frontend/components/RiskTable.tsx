@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { RiskItem, getCategoryDisplayName } from '../types';
 
@@ -8,10 +7,18 @@ interface RiskTableProps {
   onEdit?: (risk: RiskItem) => void;
   onDelete?: (riskId: string) => void;
   onMitigate?: (risk: RiskItem) => void;
+  isReadOnly?: boolean;
 }
 
 const ShieldIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+);
+
+const ViewIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+  </svg>
 );
 
 const getImpactColor = (impact: string) => {
@@ -42,16 +49,59 @@ const DeleteIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
 );
 
-const RiskTable: React.FC<RiskTableProps> = ({ risks, isCompact = false, onEdit, onDelete, onMitigate }) => {
-  const hasActions = !!(onEdit && onDelete);
+const RiskTable: React.FC<RiskTableProps> = ({ risks, isCompact = false, onEdit, onDelete, onMitigate, isReadOnly }) => {
+  const hasActions = !!(onEdit && onDelete) || !!(isReadOnly && onEdit);
+  const [sortConfig, setSortConfig] = React.useState<{ key: keyof RiskItem; direction: 'asc' | 'desc' }>({ key: 'created_at', direction: 'desc' }); // Default sort by newest
+
+  const sortedRisks = React.useMemo(() => {
+    let sortableRisks = [...risks];
+    if (sortConfig !== null) {
+      sortableRisks.sort((a, b) => {
+        const valA = a[sortConfig.key] || '';
+        const valB = b[sortConfig.key] || '';
+
+        if (valA < valB) {
+          return sortConfig.direction === 'asc' ? -1 : 1;
+        }
+        if (valA > valB) {
+          return sortConfig.direction === 'asc' ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    return sortableRisks;
+  }, [risks, sortConfig]);
+
+  const requestSort = (key: keyof RiskItem) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const getSortIcon = (key: keyof RiskItem) => {
+    if (!sortConfig || sortConfig.key !== key) return <span className="text-gray-600 ml-1">⇅</span>;
+    return sortConfig.direction === 'asc' ? <span className="ml-1 text-primary">↑</span> : <span className="ml-1 text-primary">↓</span>;
+  };
 
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm text-left text-base-content">
         <thead className="text-xs text-gray-400 uppercase bg-base-300">
           <tr>
-            {!isCompact && <th scope="col" className="px-6 py-3">ID</th>}
+            {!isCompact && (
+              <th scope="col" className="px-6 py-3 cursor-pointer hover:text-white" onClick={() => requestSort('id')}>
+                ID {getSortIcon('id')}
+              </th>
+            )}
+            {!isCompact && (
+              <th scope="col" className="px-6 py-3 cursor-pointer hover:text-white" onClick={() => requestSort('created_at')}>
+                Date {getSortIcon('created_at')}
+              </th>
+            )}
             <th scope="col" className="px-6 py-3">Description</th>
+            <th scope="col" className="px-6 py-3" onClick={() => requestSort('context')}>Context {getSortIcon('context')}</th>
             {!isCompact && <th scope="col" className="px-6 py-3">Category</th>}
             <th scope="col" className="px-6 py-3">Impact</th>
             {!isCompact && <th scope="col" className="px-6 py-3">Likelihood</th>}
@@ -61,15 +111,17 @@ const RiskTable: React.FC<RiskTableProps> = ({ risks, isCompact = false, onEdit,
           </tr>
         </thead>
         <tbody>
-          {risks.length === 0 ? (
+          {sortedRisks.length === 0 ? (
             <tr>
-              <td colSpan={isCompact ? 3 : (hasActions ? 8 : 7)} className="text-center py-8 text-gray-500">No risks to display.</td>
+              <td colSpan={isCompact ? 3 : (hasActions ? 10 : 9)} className="text-center py-8 text-gray-500">No risks to display.</td>
             </tr>
           ) : (
-            risks.map((risk) => (
+            sortedRisks.map((risk) => (
               <tr key={risk.id} className="bg-base-100 border-b border-base-300 hover:bg-base-200">
                 {!isCompact && <td className="px-6 py-4 font-medium text-gray-300 whitespace-nowrap">{risk.id}</td>}
+                {!isCompact && <td className="px-6 py-4 text-xs text-gray-400 whitespace-nowrap">{risk.created_at || '-'}</td>}
                 <td className="px-6 py-4 max-w-xs truncate" title={risk.description}>{risk.description}</td>
+                <td className="px-6 py-4 text-xs text-gray-400">{risk.context || '-'}</td>
                 {!isCompact && <td className="px-6 py-4">{getCategoryDisplayName(risk.category)}</td>}
                 <td className="px-6 py-4">
                   <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getImpactColor(risk.impact)}`}>
@@ -97,11 +149,23 @@ const RiskTable: React.FC<RiskTableProps> = ({ risks, isCompact = false, onEdit,
                 {!isCompact && hasActions && (
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-center space-x-2">
-                      {onMitigate && (
+                      {!isReadOnly && onMitigate && (
                         <button onClick={() => onMitigate(risk)} className="p-2 text-emerald-400 hover:bg-base-300 rounded-full transition-colors" aria-label="Mitigation Tracking"><ShieldIcon /></button>
                       )}
-                      <button onClick={() => onEdit(risk)} className="p-2 text-yellow-400 hover:bg-base-300 rounded-full transition-colors" aria-label="Edit Risk"><EditIcon /></button>
-                      <button onClick={() => onDelete(risk.id)} className="p-2 text-red-400 hover:bg-base-300 rounded-full transition-colors" aria-label="Delete Risk"><DeleteIcon /></button>
+
+                      {onEdit && (
+                        <button
+                          onClick={() => onEdit(risk)}
+                          className={`p-2 rounded-full transition-colors ${isReadOnly ? 'text-blue-400 hover:bg-base-300' : 'text-yellow-400 hover:bg-base-300'}`}
+                          aria-label={isReadOnly ? "View Details" : "Edit Risk"}
+                        >
+                          {isReadOnly ? <ViewIcon /> : <EditIcon />}
+                        </button>
+                      )}
+
+                      {!isReadOnly && onDelete && (
+                        <button onClick={() => onDelete(risk.id)} className="p-2 text-red-400 hover:bg-base-300 rounded-full transition-colors" aria-label="Delete Risk"><DeleteIcon /></button>
+                      )}
                     </div>
                   </td>
                 )}

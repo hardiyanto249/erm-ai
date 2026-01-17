@@ -70,52 +70,41 @@ func ImportHistoricalData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Process Headers
+	// Process Headers to detect Format
 	headers := records[0]
-	dateIdx := -1
-	metricMap := make(map[int]string) // colIndex -> MetricName
-
+	headerMap := make(map[string]int)
 	for i, h := range headers {
-		h = strings.TrimSpace(strings.ToLower(h))
-		h = strings.TrimRight(h, ".") // Handle "Date." case
-		if h == "date" || h == "tanggal" || h == "recorded_at" {
-			dateIdx = i
-		} else {
-			// Metric Name: Use raw header but trimmed
-			normHeader := strings.TrimSpace(headers[i])
-			normHeader = strings.TrimRight(normHeader, ".")
+		headerMap[strings.TrimSpace(strings.ToLower(h))] = i
+	}
 
-			// Canonicalize known metrics (Fuzzy Match - Strict)
-			lower := strings.ToLower(normHeader)
-			if lower == "rha" || strings.Contains(lower, "rasio hak amil") {
-				normHeader = "RHA"
-			} else if lower == "acr" || strings.Contains(lower, "acr") || strings.Contains(lower, "saldo kas") {
-				normHeader = "ACR"
-			} else if strings.Contains(lower, "promotion") || strings.Contains(lower, "iklan") || strings.Contains(lower, "marketing") {
-				normHeader = "PromotionCost"
-			} else if strings.Contains(lower, "pending") || strings.Contains(lower, "proposal") {
-				normHeader = "PendingProposals"
+	// Detection
+	isLongFormat := false
+	// Name check
+	nameExists := false
+	if _, ok := headerMap["name"]; ok {
+		nameExists = true
+	}
+	if _, ok := headerMap["item"]; ok {
+		nameExists = true
+	}
+
+	if nameExists {
+		if _, ok2 := headerMap["kind"]; ok2 {
+			if _, ok3 := headerMap["value"]; ok3 {
+				isLongFormat = true
 			}
-			// else keep original name (e.g. "Total Hak Amil")
-
-			metricMap[i] = normHeader
 		}
 	}
 
-	if dateIdx == -1 {
-		http.Error(w, "Missing 'Date' column", http.StatusBadRequest)
-		return
-	}
-
-	// Data Structures for "Current Value" update
+	// Data Structures
 	type MetricUpdate struct {
-		Value float64
-		Date  time.Time
+		Value       float64
+		Date        time.Time
+		IsPredictor bool
 	}
 	latestMetrics := make(map[string]MetricUpdate)
 
-	// Process Data Rows
-	successCount := 0
+	// DB Transaction
 	tx, err := db.DB.Begin()
 	if err != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -130,128 +119,257 @@ func ImportHistoricalData(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stmtHistory.Close()
 
-	for i := 1; i < len(records); i++ {
-		row := records[i]
-		if len(row) <= dateIdx {
-			continue
-		}
+	successCount := 0
 
-		dateStr := strings.TrimSpace(row[dateIdx])
-		if dateStr == "" {
-			continue
-		}
-
-		// Try different date formats (including 2-digit year)
-		var recordDate time.Time
+	// Helper to Parse Date
+	parseDate := func(dateStr string) (time.Time, bool) {
 		formats := []string{
 			"2006-01-02", "02/01/2006", "02-01-2006", "2006/01/02",
 			"02-01-06", "02/01/06", "1/2/06", "1-2-06",
 			"02-Jan-06", "02-Jan-2006",
 		}
-		parsed := false
 		for _, f := range formats {
 			t, err := time.Parse(f, dateStr)
 			if err == nil {
-				recordDate = t
-				parsed = true
-				break
+				return t, true
 			}
 		}
+		return time.Time{}, false
+	}
 
-		if !parsed {
-			continue
+	// Helper to Clean/Parse Value
+	parseValue := func(valStr string) (float64, error) {
+		valStr = strings.TrimSpace(valStr)
+		if valStr == "" {
+			return 0, fmt.Errorf("empty")
 		}
+		// Handle Percent and Currency cleaning
+		isPercent := strings.Contains(valStr, "%")
+		valStr = strings.ReplaceAll(valStr, "%", "")
+		valStr = strings.ReplaceAll(valStr, "Rp", "")
+		valStr = strings.TrimSpace(valStr)
 
-		for colIdx, valStr := range row {
-			if colIdx == dateIdx {
-				continue
+		// Heuristic: If contains comma and dot, assume dot is thousand separator (indo/euro) if occurring earlier or multiple times?
+		// User Example: "52,210,001,219" (Comma is Thousand) -> "52210001219"
+		// User Example: "13,06" (Comma is Decimal?) -> "13.06"
+		// Context dependent!
+		// Logic:
+		// 1. If multiple commas and no dots -> Commas are thousands.
+		// 2. If 1 comma and it's at end (2 digits), likely decimal?
+		// 3. If "kind" says "RHA" or % is present -> Expect decimal.
+
+		// ROBUST CLEANER:
+		// Remove all non-digits, commas, dots, minus.
+		cleanVal := ""
+		for _, r := range valStr {
+			if (r >= '0' && r <= '9') || r == '.' || r == ',' || r == '-' {
+				cleanVal += string(r)
 			}
+		}
+		valStr = cleanVal
 
-			metricName, exists := metricMap[colIdx]
-			if !exists {
-				continue
-			}
-
-			valStr = strings.TrimSpace(valStr)
-			// Remove common symbols
-			valStr = strings.ReplaceAll(valStr, "%", "")
-			valStr = strings.ReplaceAll(valStr, "Rp", "")
-			valStr = strings.TrimSpace(valStr)
-
-			if valStr == "" {
-				continue
-			}
-
-			// AGGRESSIVE CLEANING
-			// Problem: "52.210.001.219" failing to strip dots?
-			// Maybe they are distinct chars? Use Loop to keep only 0-9, . , -
-			// Or simplified heuristic:
-
-			cleanVal := ""
-			for _, r := range valStr {
-				if (r >= '0' && r <= '9') || r == '.' || r == ',' || r == '-' {
-					cleanVal += string(r)
+		// If isPercent: "13,06" -> "13.06"
+		if isPercent {
+			valStr = strings.ReplaceAll(valStr, ",", ".")
+		} else {
+			// Big Number assumption
+			if strings.Count(valStr, ",") > 1 {
+				// "52,210,001,219" -> Remove commas
+				valStr = strings.ReplaceAll(valStr, ",", "")
+			} else if strings.Count(valStr, ".") > 1 {
+				// "52.210.001.219" -> Remove dots
+				valStr = strings.ReplaceAll(valStr, ".", "")
+			} else {
+				// Ambiguous "123,456" -> Could be 123k or 123.456
+				// Default to standard float parse (dot is decimal).
+				// But user image "13,06%" suggests comma is decimal.
+				// "52,210..." suggests comma is thousand.
+				// This is contradictory in standard locale.
+				// Let's assume: If it looks like integer (formatted with thousand sep), treat as int.
+				// Comma as decimal usually implies Dot as thousand.
+				// User image has Comma as Thousand (52,210...) AND Comma as Decimal (13,06).
+				// Wait, "13,06" in image -> "Kind: RHA".
+				// "52,210,001,219" -> "Kind: Non Predictor".
+				// Maybe the App viewing the CSV (Excel) is rendering it?
+				// Raw CSV text: "31/12/2024,RHA,RHA,\"13,06%\"" vs "31/12/2024,Total...,Non...,\"52,210,001,219\""
+				// Excel often localizes display.
+				// Safest bet: Try parsing with dot as decimal first. If fails or weird, try other.
+				// Actually, just stripping "," if count > 0 is risky for "13,06".
+				// Correct Logic based on observation:
+				// If Value contains "%", treat comma as decimal.
+				// Else, remove commas (assume thousand sep).
+				if strings.Contains(valStr, ",") && isPercent {
+					valStr = strings.ReplaceAll(valStr, ",", ".")
+				} else {
+					valStr = strings.ReplaceAll(valStr, ",", "")
 				}
 			}
-			valStr = cleanVal
+		}
 
-			// Analyze Format (Super Aggressive Integer for Money)
-			if metricName != "RHA" && metricName != "ACR" {
-				fmt.Println("DEBUG: Stripping ALL separators for Money:", metricName, valStr)
-				// Assume Money values are Integers (Rupiah).
-				// Strip BOTH dots and commas.
-				valStr = strings.ReplaceAll(valStr, ".", "")
-				valStr = strings.ReplaceAll(valStr, ",", "")
-			} else {
-				// For Ratios (RHA/ACR):
-				// Expected: "13.06" or "13,06"
-				// If "13,06", standardize to "13.06"
-				valStr = strings.ReplaceAll(valStr, ",", ".")
-				// If "13.06", clear.
+		return strconv.ParseFloat(valStr, 64)
+	}
+
+	if isLongFormat {
+		fmt.Println("Processing Long Format upload...")
+		// Indices
+		dateIdx := headerMap["date"]
+		if _, ok := headerMap["date"]; !ok {
+			if idx, ok := headerMap["tanggal"]; ok {
+				dateIdx = idx
+			}
+		}
+		nameIdx := headerMap["name"]
+		if _, ok := headerMap["name"]; !ok {
+			if idx, ok := headerMap["item"]; ok {
+				nameIdx = idx
+			}
+		}
+		kindIdx := headerMap["kind"]
+		valIdx := headerMap["value"]
+
+		for i := 1; i < len(records); i++ {
+			row := records[i]
+			if len(row) <= valIdx {
+				continue
 			}
 
-			val, err := strconv.ParseFloat(valStr, 64)
+			dateStr := row[dateIdx]
+			metricName := strings.TrimSpace(row[nameIdx])
+
+			// Canonicalize Name
+			lowerName := strings.ToLower(metricName)
+			if lowerName == "rha" || strings.Contains(lowerName, "rasio hak amil") {
+				metricName = "RHA"
+			} else if lowerName == "acr" || strings.Contains(lowerName, "acr") || strings.Contains(lowerName, "saldo kas") {
+				metricName = "ACR"
+			} else if strings.Contains(lowerName, "promotion") || strings.Contains(lowerName, "iklan") || strings.Contains(lowerName, "marketing") {
+				metricName = "PromotionCost"
+			} else if strings.Contains(lowerName, "pending") || strings.Contains(lowerName, "proposal") {
+				metricName = "PendingProposals"
+			}
+
+			kindStr := strings.TrimSpace(row[kindIdx])
+			valStr := row[valIdx]
+
+			date, ok := parseDate(dateStr)
+			if !ok {
+				continue
+			}
+
+			val, err := parseValue(valStr)
 			if err != nil {
-				fmt.Printf("Warning: Row %d, Metric %s -> ParseFloat failed for value '%s'. Bytes: %v\n", i+1, metricName, valStr, []byte(valStr))
 				continue
 			}
 
 			// Insert History
-			_, err = stmtHistory.Exec(lazID, metricName, val, recordDate)
-			if err != nil {
-				fmt.Printf("Error inserting history row %d metric %s: %v\n", i+1, metricName, err)
-			} else {
-				fmt.Printf("Success Row %d Metric %s Val %.2f\n", i+1, metricName, val)
-				successCount++
+			if _, err := stmtHistory.Exec(lazID, metricName, val, date); err != nil {
+				continue
+			}
+			successCount++
+
+			// isPredictor logic
+			isPred := strings.EqualFold(kindStr, "Predictor")
+
+			// Update Latest
+			current, ok := latestMetrics[metricName]
+			if !ok || date.After(current.Date) {
+				latestMetrics[metricName] = MetricUpdate{Value: val, Date: date, IsPredictor: isPred}
+			}
+		}
+
+	} else {
+		// Existing Wide Format Logic (simplified/cleaned)
+		fmt.Println("Processing Wide Format upload...")
+		dateIdx := -1
+		colMap := make(map[int]string)
+
+		for i, h := range headers {
+			lower := strings.TrimSpace(strings.ToLower(h))
+			// Skip metadata columns in Wide Format
+			if lower == "item" || lower == "kind" || lower == "kategori" || lower == "nama" {
+				continue
 			}
 
-			// Track Latest for Metrics Table
-			current, ok := latestMetrics[metricName]
-			if !ok || recordDate.After(current.Date) || (recordDate.Equal(current.Date) && true) {
-				latestMetrics[metricName] = MetricUpdate{Value: val, Date: recordDate}
+			if lower == "date" || lower == "tanggal" || lower == "recorded_at" {
+				dateIdx = i
+			} else {
+				// Normalize Name
+				if lower == "rha" || strings.Contains(lower, "rasio hak amil") {
+					colMap[i] = "RHA"
+				} else if lower == "acr" || strings.Contains(lower, "acr") || strings.Contains(lower, "saldo kas") {
+					colMap[i] = "ACR"
+				} else if strings.Contains(lower, "promotion") || strings.Contains(lower, "iklan") || strings.Contains(lower, "marketing") {
+					colMap[i] = "PromotionCost"
+				} else if strings.Contains(lower, "pending") || strings.Contains(lower, "proposal") {
+					colMap[i] = "PendingProposals"
+				} else {
+					colMap[i] = strings.TrimSpace(headers[i])
+				}
+			}
+		}
+
+		if dateIdx == -1 {
+			http.Error(w, "Missing 'Date' column", http.StatusBadRequest)
+			return
+		}
+
+		for i := 1; i < len(records); i++ {
+			row := records[i]
+			if len(row) <= dateIdx {
+				continue
+			}
+
+			date, ok := parseDate(row[dateIdx])
+			if !ok {
+				fmt.Printf("Skipping row %d: Invalid Date '%s'\n", i, row[dateIdx])
+				continue
+			}
+
+			for colIdx, valStr := range row {
+				if colIdx == dateIdx {
+					continue
+				}
+				name, exists := colMap[colIdx]
+				if !exists {
+					continue
+				}
+
+				val, err := parseValue(valStr)
+				if err != nil {
+					fmt.Printf("Skipping row %d metric %s: Invalid Value '%s'\n", i, name, valStr)
+					continue
+				}
+
+				stmtHistory.Exec(lazID, name, val, date)
+				successCount++
+
+				// Default true for legacy wide format
+				isPred := true
+				if name == "RHA" || name == "ACR" {
+					isPred = false
+				} // Targets aren't predictors
+
+				current, ok := latestMetrics[name]
+				if !ok || date.After(current.Date) {
+					latestMetrics[name] = MetricUpdate{Value: val, Date: date, IsPredictor: isPred}
+				}
 			}
 		}
 	}
 
-	// Upsert into 'metrics' table
+	// Upsert metrics with is_predictor
 	stmtMetrics, err := tx.Prepare(`
-		INSERT INTO metrics (laz_id, name, value, updated_at) 
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO metrics (laz_id, name, value, updated_at, is_predictor) 
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (laz_id, name) 
-		DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+		DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at, is_predictor = EXCLUDED.is_predictor
 	`)
 	if err != nil {
 		fmt.Println("Error preparing metric upsert:", err)
-		// Don't fail entire request? Or do? Better to fail.
-		// http.Error ...
 	} else {
 		defer stmtMetrics.Close()
 		for name, update := range latestMetrics {
-			fmt.Printf("Updating Current Metric: LAZ %d | %s = %.2f (Date: %s)\n", lazID, name, update.Value, update.Date.Format("2006-01-02"))
-			_, err := stmtMetrics.Exec(lazID, name, update.Value, update.Date)
-			if err != nil {
-				fmt.Printf("Failed to update current metric %s: %v\n", name, err)
-			}
+			stmtMetrics.Exec(lazID, name, update.Value, update.Date, update.IsPredictor)
 		}
 	}
 
@@ -261,5 +379,5 @@ func ImportHistoricalData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf(`{"message": "Successfully imported %d data points and updated current metrics"}`, successCount)))
+	w.Write([]byte(fmt.Sprintf(`{"message": "Successfully imported %d data points"}`, successCount)))
 }

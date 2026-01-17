@@ -1,13 +1,14 @@
-
 import React, { useState, useEffect } from 'react';
 import { RiskItem, RiskCategory, RiskImpact, RiskLikelihood, RiskStatus } from '../types';
 import { authFetch } from '../utils/auth';
+import { API_BASE_URL } from '../utils/config';
 
 interface LogRiskModalProps {
   onClose: () => void;
   onSave: (risk: RiskItem) => void;
   riskToEdit?: RiskItem | null;
   currentRiskCount: number;
+  isReadOnly?: boolean;
 }
 
 interface GeneratedRisk {
@@ -18,10 +19,12 @@ interface GeneratedRisk {
   likelihood: string;
   status: string;
   reasoning: string;
+  context?: string;
 }
 
-const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit, currentRiskCount }) => {
+const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit, currentRiskCount, isReadOnly }) => {
   const [description, setDescription] = useState('');
+  const [context, setContext] = useState('');
   const [category, setCategory] = useState<keyof typeof RiskCategory>('Operational');
   const [impact, setImpact] = useState<keyof typeof RiskImpact>('Low');
   const [likelihood, setLikelihood] = useState<keyof typeof RiskLikelihood>('Low');
@@ -37,8 +40,9 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
   const isEditMode = !!riskToEdit;
 
   useEffect(() => {
-    if (isEditMode) {
+    if (isEditMode && riskToEdit) {
       setDescription(riskToEdit.description);
+      setContext(riskToEdit.context || '');
       setCategory(riskToEdit.category as keyof typeof RiskCategory);
       setImpact(riskToEdit.impact as keyof typeof RiskImpact);
       setLikelihood(riskToEdit.likelihood as keyof typeof RiskLikelihood);
@@ -53,7 +57,7 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
     setSelectedRiskIndices(new Set());
     setError(null);
     try {
-      const res = await authFetch('http://localhost:8080/api/generate-risks', {
+      const res = await authFetch(`${API_BASE_URL}/api/generate-risks`, {
         method: 'POST',
         body: JSON.stringify({ eventType }),
       });
@@ -84,11 +88,8 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
     const risksToSave: RiskItem[] = [];
     let counter = currentRiskCount + 1;
 
-    // Convert indices to array to sort them? Iterating Set order is insertion order usually,
-    // but let's iterate generatedRisks and check set for stability
     generatedRisks.forEach((gen, idx) => {
       if (selectedRiskIndices.has(idx)) {
-        // Map to RiskItem
         const newRisk: RiskItem = {
           id: `MN-${counter.toString().padStart(3, '0')}`,
           description: gen.description,
@@ -96,6 +97,7 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
           impact: (gen.impact in RiskImpact) ? gen.impact as keyof typeof RiskImpact : 'Low',
           likelihood: (gen.likelihood in RiskLikelihood) ? gen.likelihood as keyof typeof RiskLikelihood : 'Low',
           status: 'Open',
+          context: gen.context || eventType,
         };
         risksToSave.push(newRisk);
         counter++;
@@ -108,7 +110,7 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
 
   const applySuggestion = (risk: GeneratedRisk) => {
     setDescription(risk.description);
-    // Map strings to Enums (simple validation or fallback)
+    setContext(risk.context || eventType);
     if (risk.category in RiskCategory) setCategory(risk.category as keyof typeof RiskCategory);
     if (risk.impact in RiskImpact) setImpact(risk.impact as keyof typeof RiskImpact);
     if (risk.likelihood in RiskLikelihood) setLikelihood(risk.likelihood as keyof typeof RiskLikelihood);
@@ -122,8 +124,9 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
     setError(null);
 
     const newRisk: RiskItem = {
-      id: isEditMode ? riskToEdit.id : `MN-${(currentRiskCount + 1).toString().padStart(3, '0')}`, // Manual ID prefix
+      id: isEditMode && riskToEdit ? riskToEdit.id : `MN-${(currentRiskCount + 1).toString().padStart(3, '0')}`,
       description,
+      context,
       category,
       impact,
       likelihood,
@@ -144,12 +147,13 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
       <div className="bg-base-100 rounded-2xl shadow-2xl w-full max-w-2xl transform transition-all max-h-[90vh] overflow-y-auto">
         <div className="p-8 space-y-6">
           <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-bold text-white">{isEditMode ? 'Edit Risk' : 'Log New Risk'}</h2>
+            <h2 className="text-2xl font-bold text-white">
+              {isReadOnly ? 'Risk Details' : (isEditMode ? 'Edit Risk' : 'Log New Risk')}
+            </h2>
             <button onClick={onClose} className="text-gray-400 hover:text-white text-3xl leading-none">&times;</button>
           </div>
 
-          {/* AI Generation Section (Only in Create Mode) */}
-          {!isEditMode && (
+          {!isEditMode && !isReadOnly && (
             <div className="bg-base-200 p-4 rounded-lg border border-indigo-500/30">
               <h3 className="text-sm font-bold text-indigo-300 mb-2 flex items-center gap-2">
                 <span>✨</span> AI Risk Assistant
@@ -194,7 +198,7 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
                         type="checkbox"
                         className="checkbox checkbox-xs checkbox-primary mt-1"
                         checked={selectedRiskIndices.has(idx)}
-                        onChange={() => { }} // Handled by div click
+                        onChange={() => { }}
                       />
                       <div className="flex-grow" onClick={(e) => { e.stopPropagation(); applySuggestion(risk); }}>
                         <div className="font-bold text-white group-hover:text-indigo-300 pointer-events-none">{risk.category} - {risk.impact}</div>
@@ -210,7 +214,10 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
           )}
 
           <p className="text-base-content">
-            {isEditMode ? 'Update the details for the existing risk.' : 'Manually record a new risk identified by your team.'}
+            {isReadOnly
+              ? 'View details for this risk.'
+              : (isEditMode ? 'Update the details for the existing risk.' : 'Manually record a new risk identified by your team.')
+            }
           </p>
           <div className="space-y-4">
             <div>
@@ -218,34 +225,71 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
               <textarea
                 id="description"
                 rows={3}
-                className="w-full p-3 bg-base-200 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary transition"
+                className="w-full p-3 bg-base-200 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary transition disabled:opacity-50 disabled:cursor-not-allowed"
                 placeholder="Describe the potential risk..."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
+                disabled={isReadOnly}
+              />
+            </div>
+            <div>
+              <label htmlFor="context" className="block text-sm font-medium text-gray-300 mb-2">Context / Project</label>
+              <input
+                id="context"
+                type="text"
+                className="w-full p-3 bg-base-200 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary transition disabled:opacity-50 disabled:cursor-not-allowed"
+                placeholder="e.g. Ramadhan Program 2024"
+                value={context}
+                onChange={(e) => setContext(e.target.value)}
+                disabled={isReadOnly}
               />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label htmlFor="category" className="block text-sm font-medium text-gray-300 mb-2">Category</label>
-                <select id="category" value={category} onChange={e => setCategory(e.target.value as keyof typeof RiskCategory)} className="w-full p-3 bg-base-200 border border-base-300 rounded-lg">
+                <select
+                  id="category"
+                  value={category}
+                  onChange={e => setCategory(e.target.value as keyof typeof RiskCategory)}
+                  className="w-full p-3 bg-base-200 border border-base-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={isReadOnly}
+                >
                   {renderSelectOptions(RiskCategory)}
                 </select>
               </div>
               <div>
                 <label htmlFor="status" className="block text-sm font-medium text-gray-300 mb-2">Status</label>
-                <select id="status" value={status} onChange={e => setStatus(e.target.value as keyof typeof RiskStatus)} className="w-full p-3 bg-base-200 border border-base-300 rounded-lg">
+                <select
+                  id="status"
+                  value={status}
+                  onChange={e => setStatus(e.target.value as keyof typeof RiskStatus)}
+                  className="w-full p-3 bg-base-200 border border-base-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={isReadOnly}
+                >
                   {renderSelectOptions(RiskStatus)}
                 </select>
               </div>
               <div>
                 <label htmlFor="impact" className="block text-sm font-medium text-gray-300 mb-2">Impact</label>
-                <select id="impact" value={impact} onChange={e => setImpact(e.target.value as keyof typeof RiskImpact)} className="w-full p-3 bg-base-200 border border-base-300 rounded-lg">
+                <select
+                  id="impact"
+                  value={impact}
+                  onChange={e => setImpact(e.target.value as keyof typeof RiskImpact)}
+                  className="w-full p-3 bg-base-200 border border-base-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={isReadOnly}
+                >
                   {renderSelectOptions(RiskImpact)}
                 </select>
               </div>
               <div>
                 <label htmlFor="likelihood" className="block text-sm font-medium text-gray-300 mb-2">Likelihood</label>
-                <select id="likelihood" value={likelihood} onChange={e => setLikelihood(e.target.value as keyof typeof RiskLikelihood)} className="w-full p-3 bg-base-200 border border-base-300 rounded-lg">
+                <select
+                  id="likelihood"
+                  value={likelihood}
+                  onChange={e => setLikelihood(e.target.value as keyof typeof RiskLikelihood)}
+                  className="w-full p-3 bg-base-200 border border-base-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={isReadOnly}
+                >
                   {renderSelectOptions(RiskLikelihood)}
                 </select>
               </div>
@@ -253,8 +297,10 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
           </div>
           {error && <p className="text-sm text-error text-center">{error}</p>}
           <div className="flex justify-end gap-4">
-            <button onClick={onClose} className="px-6 py-2 rounded-lg bg-base-300 text-white hover:bg-opacity-80 transition">Cancel</button>
-            <button onClick={handleSave} className="px-6 py-2 rounded-lg bg-primary text-white font-semibold hover:bg-opacity-80 transition">Save Risk</button>
+            <button onClick={onClose} className="px-6 py-2 rounded-lg bg-base-300 text-white hover:bg-opacity-80 transition">{isReadOnly ? 'Close' : 'Cancel'}</button>
+            {!isReadOnly && (
+              <button onClick={handleSave} className="px-6 py-2 rounded-lg bg-primary text-white font-semibold hover:bg-opacity-80 transition">Save Risk</button>
+            )}
           </div>
         </div>
       </div>

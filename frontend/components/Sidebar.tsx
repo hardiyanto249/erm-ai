@@ -19,19 +19,30 @@ const TrackingIcon = () => (
   </svg>
 );
 
+const ConfigurationIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+  </svg>
+);
 
 interface SidebarProps {
   activeView: string;
-  setActiveView: (view: 'dashboard' | 'risks' | 'compliance' | 'zis-tracking') => void;
+  setActiveView: (view: any) => void;
+  userRole?: string;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, userRole }) => {
   const navItems = [
     { id: 'dashboard', icon: <DashboardIcon />, label: 'Dashboard' },
     { id: 'risks', icon: <RiskIcon />, label: 'Risk Management' },
     // { id: 'compliance', icon: <ComplianceIcon />, label: 'Sharia Compliance' },
     // { id: 'zis-tracking', icon: <TrackingIcon />, label: 'ZIS Tracking' },
   ];
+
+  if (userRole === 'Admin') {
+    navItems.push({ id: 'configuration', icon: <ConfigurationIcon />, label: 'Konfigurasi' });
+  }
 
   return (
     <aside className="w-20 md:w-64 bg-base-100 text-base-content flex flex-col">
@@ -50,8 +61,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView }) => {
             key={item.id}
             onClick={() => setActiveView(item.id as 'dashboard' | 'risks' | 'compliance' | 'zis-tracking')}
             className={`flex items-center w-full p-3 rounded-lg transition-colors duration-200 ${activeView === item.id
-                ? 'bg-primary text-white'
-                : 'hover:bg-base-300'
+              ? 'bg-primary text-white'
+              : 'hover:bg-base-300'
               }`}
           >
             {item.icon}

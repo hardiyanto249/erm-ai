@@ -37,6 +37,8 @@ export interface RiskItem {
   mitigation_plan?: string;
   mitigation_status?: string; // e.g. 'Planned', 'In Progress', 'Completed'
   mitigation_progress?: number; // 0-100
+  context?: string; // Project/Source
+  created_at?: string;
 }
 
 export interface Kpi {
@@ -66,4 +68,11 @@ export interface LazPartner {
   name: string;
   scale: string;
   description: string;
+}
+
+export interface User {
+  id: number;
+  laz_id: number;
+  email: string;
+  role: string;
 }

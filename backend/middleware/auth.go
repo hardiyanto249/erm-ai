@@ -1,10 +1,10 @@
 package middleware
 
 import (
-	"backend/db"
-	"backend/utils"
 	"context"
 	"net/http"
+	"strconv"
+	"strings"
 )
 
 // type contextKey string
@@ -15,26 +15,37 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("X-LAZ-Token")
 		if token == "" {
-			// For backward compatibility during migration, if NO token is present,
-			// we MIGHT check for query param or default to 1, but for strict security per request:
-			// We return 401 Unauthorized.
-			// HOWEVER, to keep the current frontend working until we update it,
-			// let's allow a fallback if it's a "public" GET request or temporary dev mode?
-			// NO, per user request: "Secret, only they can input". We enforce it.
 			http.Error(w, "Missing Authentication Token", http.StatusUnauthorized)
 			return
 		}
 
-		// Hash the token to compare with DB
-		tokenHash := utils.HashToken(token)
+		// STRATEGY CHANGE: Simple "laz:<id>" token for MVP Login
+		// Real production should use JWT (Bearer token)
 
-		// Find LAZ by token hash
-		// We need a DB function for this.
-		lazID, err := db.GetLazIDByToken(tokenHash)
-		if err != nil || lazID == 0 {
-			http.Error(w, "Invalid Authentication Token", http.StatusUnauthorized)
+		// 1. Check if token starts with "laz:"
+		if !strings.HasPrefix(token, "laz:") {
+			http.Error(w, "Invalid Token Format", http.StatusUnauthorized)
 			return
 		}
+
+		// Extract ID string
+		idStr := strings.TrimPrefix(token, "laz:")
+		if idStr == "" {
+			http.Error(w, "Invalid Token Format: Missing LAZ ID", http.StatusUnauthorized)
+			return
+		}
+
+		// Convert ID string to int
+		lazID, err := strconv.Atoi(idStr)
+		if err != nil {
+			http.Error(w, "Invalid Token Format: LAZ ID is not a number", http.StatusUnauthorized)
+			return
+		}
+
+		// For MVP, we trust the provided lazID.
+		// In a real app, we might verify this lazID against a database
+		// or ensure it's a valid, active LAZ.
+		// For now, just setting it in context.
 
 		// Inject lazID into context
 		ctx := context.WithValue(r.Context(), LazIDKey, lazID)

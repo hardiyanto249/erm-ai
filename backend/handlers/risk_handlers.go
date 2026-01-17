@@ -89,11 +89,26 @@ func GenerateRisks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	risks, err := GeminiSvc.GenerateRisks(lazID, req.EventType, PromptCfg)
+	// Fallback prompt if config is missing
+	activePromptCfg := PromptCfg
+	if activePromptCfg == nil || activePromptCfg.AnalysisPrompt == "" {
+		fmt.Println("⚠️  Prompt Config missing, using hardcoded fallback.")
+		activePromptCfg = &config.PromptConfig{
+			SystemInstruction: "Anda adalah auditor risiko syariah. Output hanya JSON array.",
+			AnalysisPrompt:    "Analisis risiko untuk kegiatan: {{.EventType}}. Output JSON array of objects with fields: id, category, description, impact, likelihood, status, confidenceScore, violationType, reasoning, suggestedMitigation.",
+		}
+	}
+
+	risks, err := GeminiSvc.GenerateRisks(lazID, req.EventType, activePromptCfg)
 	if err != nil {
 		fmt.Printf("❌ Gemini Error: %v\n", err) // Add logging
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Populate Context for each generated risk
+	for i := range risks {
+		risks[i].Context = req.EventType
 	}
 
 	w.Header().Set("Content-Type", "application/json")

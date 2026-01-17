@@ -11,6 +11,8 @@ type Risk struct {
 	MitigationPlan     string `json:"mitigation_plan"`
 	MitigationStatus   string `json:"mitigation_status"`
 	MitigationProgress int    `json:"mitigation_progress"`
+	Context            string `json:"context,omitempty"` // New Field: Project/Event Name
+	CreatedAt          string `json:"created_at"`
 }
 
 type GeneratedRisk struct {
@@ -24,4 +26,5 @@ type GeneratedRisk struct {
 	ViolationType       string  `json:"violationType"`
 	Reasoning           string  `json:"reasoning"`
 	SuggestedMitigation string  `json:"suggestedMitigation"`
+	Context             string  `json:"context,omitempty"` // New Field
 }

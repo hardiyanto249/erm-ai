@@ -6,4 +6,5 @@ type LazPartner struct {
 	Scale        string `json:"scale"`
 	Description  string `json:"description"`
 	ApiTokenHash string `json:"-"` // Never output this in JSON
+	IsActive     bool   `json:"is_active"`
 }
