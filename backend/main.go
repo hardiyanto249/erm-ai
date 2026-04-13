@@ -114,13 +114,17 @@ func main() {
 
 	// CORS
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"},
+		AllowedOrigins:   []string{"https://erm-ai.centonk.my.id", "http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE"},
 		AllowedHeaders:   []string{"Content-Type", "X-LAZ-Token"}, // Add X-LAZ-Token
 		AllowCredentials: true,
 	})
 
 	handler := c.Handler(mux)
+
+	// Serve Static Files (Frontend)
+	fs := http.FileServer(http.Dir("./dist"))
+	mux.Handle("/", fs)
 
 	log.Println("Server starting on port 8080...")
 	log.Fatal(http.ListenAndServe(":8080", handler))
