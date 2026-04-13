@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"time"
 
 	"backend/models"
 
@@ -342,6 +343,11 @@ func GetRisks(lazID int) ([]models.Risk, error) {
 }
 
 func CreateRisk(risk models.Risk) error {
+	// Jika ID kosong (dari AI atau New Manual), generate ID unik berdasarkan timestamp
+	if risk.ID == "" {
+		risk.ID = fmt.Sprintf("AI-%d", time.Now().UnixNano()/1e6)
+	}
+
 	query := `INSERT INTO risks (id, laz_id, description, category, impact, likelihood, status, mitigation_plan, mitigation_status, mitigation_progress, context) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 	_, err := DB.Exec(query, risk.ID, risk.LazID, risk.Description, risk.Category, risk.Impact, risk.Likelihood, risk.Status, risk.MitigationPlan, risk.MitigationStatus, risk.MitigationProgress, risk.Context)
 	return err

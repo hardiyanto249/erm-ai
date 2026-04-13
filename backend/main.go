@@ -11,10 +11,16 @@ import (
 	"backend/middleware"
 	"backend/services"
 
+	"github.com/joho/godotenv"
 	"github.com/rs/cors"
 )
 
 func main() {
+	// Load environment variables from .env
+	if err := godotenv.Load(); err != nil {
+		log.Println("ℹ️ No .env file found, using system environment variables")
+	}
+
 	// Load Config
 	cfg := config.Load()
 

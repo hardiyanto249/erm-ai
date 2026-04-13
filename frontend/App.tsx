@@ -7,13 +7,14 @@ import ShariaCompliance from './components/ShariaCompliance';
 import ZisTracking from './components/ZisTracking';
 import LogRiskModal from './components/LogRiskModal';
 import Login from './components/Login';
+import RHAPredictionForm from './components/RHAPredictionForm';
 import { RiskItem, LazPartner } from './types';
 import { getAuthToken, clearAuthToken, authFetch, getAuthHeaders } from './utils/auth';
 import { API_BASE_URL } from './utils/config';
 import MitigationModal from './components/MitigationModal';
 import Configuration from './components/Configuration';
 
-type View = 'dashboard' | 'risks' | 'compliance' | 'zis-tracking' | 'configuration';
+type View = 'dashboard' | 'risks' | 'compliance' | 'zis-tracking' | 'configuration' | 'prediction';
 
 const App: React.FC = () => {
   // Auth State
@@ -183,6 +184,8 @@ const App: React.FC = () => {
         return <ShariaCompliance key={activeView} lazId={selectedLazId} isReadOnly={isReadOnly} />;
       case 'zis-tracking':
         return <ZisTracking key={activeView} lazId={selectedLazId} />;
+      case 'prediction':
+        return <RHAPredictionForm lazId={selectedLazId} />;
       case 'configuration':
         return <Configuration />;
       default:

@@ -55,9 +55,14 @@ func GetAnomalyCheck(w http.ResponseWriter, r *http.Request) {
 
 // runPredictionHelper_Dynamic automatically finds all available predictors
 func runPredictionHelper(lazID int, targetName string, excludedMetrics []string) map[string]interface{} {
-	// 1. Fetch All Data for valid variables (exclude if value is null? standard scan handles it)
-	// We want all metrics
-	rows, err := db.DB.Query("SELECT metric_name, value, recorded_at FROM metric_history WHERE laz_id=$1 ORDER BY recorded_at ASC", lazID)
+	// 1. Fetch All Data for valid variables
+	// === ROLLING WINDOW: Hanya gunakan data 5 tahun terakhir ===
+	rows, err := db.DB.Query(`
+		SELECT metric_name, value, recorded_at 
+		FROM metric_history 
+		WHERE laz_id=$1 
+		  AND recorded_at >= NOW() - INTERVAL '5 years'
+		ORDER BY recorded_at ASC`, lazID)
 	if err != nil {
 		return nil
 	}
@@ -67,6 +72,9 @@ func runPredictionHelper(lazID int, targetName string, excludedMetrics []string)
 	dataMap := make(map[string]map[string]float64)
 	allMetrics := make(map[string]bool)
 
+	// Track date range for display
+	var minDate, maxDate string
+
 	for rows.Next() {
 		var name string
 		var val float64
@@ -75,6 +83,13 @@ func runPredictionHelper(lazID int, targetName string, excludedMetrics []string)
 			continue
 		}
 		dKey := date.Format("2006-01-02")
+
+		if minDate == "" || dKey < minDate {
+			minDate = dKey
+		}
+		if dKey > maxDate {
+			maxDate = dKey
+		}
 
 		if _, ok := dataMap[dKey]; !ok {
 			dataMap[dKey] = make(map[string]float64)
@@ -307,6 +322,9 @@ func runPredictionHelper(lazID int, targetName string, excludedMetrics []string)
 		"predicted_value": predictedVal,
 		"coefficients":    coeffs,
 		"message":         explanation,
+		"data_from":       minDate,
+		"data_to":         maxDate,
+		"window":          "5 tahun terakhir",
 	}
 
 	return result

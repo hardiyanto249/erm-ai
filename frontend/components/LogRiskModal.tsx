@@ -61,16 +61,22 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
         method: 'POST',
         body: JSON.stringify({ eventType }),
       });
-      if (!res.ok) throw new Error('Failed to generate risks');
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || 'Failed to generate risks');
+      }
+      
       const data = await res.json();
       setGeneratedRisks(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("Failed to generate risks from AI.");
+      setError(err.message || "Failed to generate risks from AI.");
     } finally {
       setIsGenerating(false);
     }
   };
+
 
   const toggleSelection = (index: number) => {
     const newSet = new Set(selectedRiskIndices);
@@ -91,7 +97,7 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
     generatedRisks.forEach((gen, idx) => {
       if (selectedRiskIndices.has(idx)) {
         const newRisk: RiskItem = {
-          id: `MN-${counter.toString().padStart(3, '0')}`,
+          id: '', // Biarkan backend/database yang generate ID unik
           description: gen.description,
           category: (gen.category in RiskCategory) ? gen.category as keyof typeof RiskCategory : 'Operational',
           impact: (gen.impact in RiskImpact) ? gen.impact as keyof typeof RiskImpact : 'Low',
@@ -100,7 +106,6 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
           context: gen.context || eventType,
         };
         risksToSave.push(newRisk);
-        counter++;
       }
     });
 
@@ -124,7 +129,7 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
     setError(null);
 
     const newRisk: RiskItem = {
-      id: isEditMode && riskToEdit ? riskToEdit.id : `MN-${(currentRiskCount + 1).toString().padStart(3, '0')}`,
+      id: isEditMode && riskToEdit ? riskToEdit.id : '', // Empty ID for new, existing ID for update
       description,
       context,
       category,

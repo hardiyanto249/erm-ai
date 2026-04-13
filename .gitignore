@@ -24,3 +24,18 @@ dist-ssr
 *.sw?
 
 .env*
+
+# Build Artifacts & Deployments
+*.zip
+deploy_base64.txt
+error.txt
+build.log
+
+# Database & Temporary Scripts
+*.sql
+metadata.json
+
+# Backup Files
+dist-bck/
+*-old/
+*.bak

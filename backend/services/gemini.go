@@ -142,10 +142,6 @@ func (s *GeminiService) GenerateRisks(lazID int, eventType string, promptCfg *co
 		return nil, err
 	}
 
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("empty response from Gemini")
-	}
-
 	// Extract text
 	var responseText string
 	for _, part := range resp.Candidates[0].Content.Parts {
@@ -155,7 +151,6 @@ func (s *GeminiService) GenerateRisks(lazID int, eventType string, promptCfg *co
 	}
 
 	// Clean Markdown code blocks
-	// Robust cleanup for "```json", "```", and surrounding whitespace/newlines
 	responseText = strings.TrimSpace(responseText)
 	if strings.HasPrefix(responseText, "```json") {
 		responseText = strings.TrimPrefix(responseText, "```json")
@@ -165,13 +160,30 @@ func (s *GeminiService) GenerateRisks(lazID int, eventType string, promptCfg *co
 	if strings.HasSuffix(responseText, "```") {
 		responseText = strings.TrimSuffix(responseText, "```")
 	}
+
+	// Extracted text cleanup (more robust)
 	responseText = strings.TrimSpace(responseText)
+	
+	// Helper regex-like cleaning for trailing commas before closing braces/brackets
+	responseText = strings.ReplaceAll(responseText, ",}", "}")
+	responseText = strings.ReplaceAll(responseText, ",]", "]")
 
 	var risks []models.GeneratedRisk
 	if err := json.Unmarshal([]byte(responseText), &risks); err != nil {
 		fmt.Printf("❌ JSON Parse Error: %v\nRaw Text: %s\n", err, responseText)
-		// Check if the response was just a refusal or plain text
-		return nil, fmt.Errorf("failed to parse JSON from AI response: %v", err)
+		
+		// Attempt one more recovery: find the first '[' and last ']'
+		start := strings.Index(responseText, "[")
+		end := strings.LastIndex(responseText, "]")
+		if start != -1 && end != -1 && end > start {
+			recovered := responseText[start : end+1]
+			if errRec := json.Unmarshal([]byte(recovered), &risks); errRec == nil {
+				fmt.Println("✅ Recovered JSON via bracket extraction!")
+				return risks, nil
+			}
+		}
+		
+		return nil, fmt.Errorf("AI menghasilkan format JSON yang tidak valid. Silakan coba Generate ulang.")
 	}
 
 	return risks, nil

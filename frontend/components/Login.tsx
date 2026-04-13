@@ -31,8 +31,12 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, password })
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.message || "Failed to login");
+            // Safely parse: backend may return plain text on errors
+            const rawText = await res.text();
+            let data: any = {};
+            try { data = JSON.parse(rawText); } catch { data = { message: rawText.trim() }; }
+            
+            if (!res.ok) throw new Error(data.message || rawText || 'Login failed');
 
             // Save Token & User Info
             setAuthToken(data.token);
@@ -67,8 +71,12 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.message || "Failed to register");
+            // Safely parse response
+            const rawText = await res.text();
+            let data: any = {};
+            try { data = JSON.parse(rawText); } catch { data = { message: rawText.trim() }; }
+            
+            if (!res.ok) throw new Error(data.message || rawText || 'Registration failed');
 
             setRegSuccess(true);
             setRegEmail('');
