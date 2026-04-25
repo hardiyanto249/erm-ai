@@ -35,49 +35,38 @@ func NewGeminiService(cfg *config.Config) (*GeminiService, error) {
 		return nil, err
 	}
 
-	// Auto-detect best available model
+	// SMART RADAR SCANNER (v2.0 UltraSonik): 
+	// Kita tidak lagi menebak. Kita tanya langsung ke API Google model apa yang aktif bagi bapak.
 	var selectedModel string
 	iter := client.ListModels(ctx)
-	fmt.Println("🔍 DEBUG: Scanning available Gemini Models...")
 	for {
 		m, err := iter.Next()
-		if err != nil {
-			break
-		}
-		// fmt.Printf(" - Found: %s\n", m.Name)
-
-		// Check if supports generateContent
-		supportsGenerate := false
+		if err != nil { break }
+		
+		// Syarat: Harus dukung generateContent
+		canGenerate := false
 		for _, method := range m.SupportedGenerationMethods {
-			if method == "generateContent" {
-				supportsGenerate = true
-				break
-			}
+			if method == "generateContent" { canGenerate = true; break }
 		}
 
-		if supportsGenerate {
-			// Prioritize Flash or Pro
-			if strings.Contains(m.Name, "flash") {
-				selectedModel = m.Name
-			} else if strings.Contains(m.Name, "pro") && !strings.Contains(selectedModel, "flash") {
-				selectedModel = m.Name
-			} else if selectedModel == "" {
-				selectedModel = m.Name // Fallback to any generateContent model
+		if canGenerate {
+			// Prioritas: Cari yang mengandung '1.5' dan 'flash'
+			if strings.Contains(m.Name, "1.5") && strings.Contains(m.Name, "flash") {
+				selectedModel = strings.TrimPrefix(m.Name, "models/")
+				break // Langsung kunci!
+			}
+			// Cadangan: Ambil model 'pro' jika flash tidak ada
+			if strings.Contains(m.Name, "pro") && selectedModel == "" {
+				selectedModel = strings.TrimPrefix(m.Name, "models/")
 			}
 		}
 	}
 
-	// Clean up model name (remove "models/" prefix if present, though library handles it generally,
-	// GenerativeModel expects name like "gemini-pro" or "models/gemini-pro")
 	if selectedModel == "" {
-		fmt.Println("⚠️ Warning: No suitable Gemini model found during scan. Defaulting to 'gemini-pro'")
-		selectedModel = "gemini-pro"
-	} else {
-		// client.GenerativeModel prefers just the name often, but let's keep what ListModels returns
-		// ListModels returns "models/gemini-pro".
-		// client.GenerativeModel handles "models/" prefix fine.
-		fmt.Printf("✅ Selected AI Model: %s\n", selectedModel)
+		selectedModel = "gemini-1.5-flash-latest" // Harapan terakhir
 	}
+
+	fmt.Printf("✅ SCANNER SUCCESS: Menggunakan model terverifikasi -> %s\n", selectedModel)
 	fmt.Println("-------------------------------------------")
 
 	return &GeminiService{ctx: ctx, client: client, ModelName: selectedModel}, nil
@@ -91,26 +80,34 @@ func (s *GeminiService) GenerateRisks(lazID int, eventType string, promptCfg *co
 	// Use dynamically selected model
 	model := s.client.GenerativeModel(s.ModelName)
 
-	// Set system instruction
-	if promptCfg.SystemInstruction != "" {
+	// DINONAKTIFKAN TOTAL (Hotfix v3 per diskusi audit): 
+	// Menghindari Error 400 pada model lawas. Seluruh instruksi dialihkan ke Prompt Utama.
+	/*
+	if promptCfg != nil && promptCfg.SystemInstruction != "" {
+		fmt.Printf("ℹ️  Menggunakan SystemInstruction: %s\n", promptCfg.SystemInstruction[:10]+"...")
 		model.SystemInstruction = &genai.Content{
 			Parts: []genai.Part{
 				genai.Text(promptCfg.SystemInstruction),
 			},
 		}
 	}
+	*/
 
-	// Configure JSON response (if supported by the client library version and model)
-	// Note: explicit JSON mode or just prompting. standard genai-go supports MIME type storage in underlying pb but high level might vary.
-	// For "gemini-1.5-flash", we can just rely on the prompt asking for JSON.
-	model.ResponseMIMEType = "application/json"
+	// DINONAKTIFKAN (Hotfix Per diskusi Audit UltraSonik): 
+	// Menghindari Error 400: JSON mode is not enabled for this model
+	// Kita akan mengandalkan instruksi prompt untuk mendapatkan format JSON.
+	// model.ResponseMIMEType = "application/json"
 
 	// Ambil historical context dari DB
 	historicalContext, err := getHistoricalContext(lazID)
 	if err != nil {
-		// Non-blocking, continue with empty context if DB fail
 		historicalContext = ""
 	}
+
+	// AUDIT ULTRASONIK: Pembersihan karakter yang berisiko merusak integrasi prompt
+	historicalContext = strings.ReplaceAll(historicalContext, "\"", "'")
+	historicalContext = strings.ReplaceAll(historicalContext, "\n", " ")
+	historicalContext = strings.ReplaceAll(historicalContext, "\r", " ")
 
 	data := PromptData{
 		EventType:         eventType,
@@ -168,22 +165,24 @@ func (s *GeminiService) GenerateRisks(lazID int, eventType string, promptCfg *co
 	responseText = strings.ReplaceAll(responseText, ",}", "}")
 	responseText = strings.ReplaceAll(responseText, ",]", "]")
 
+	// AUDIT ULTRASONIK: Robot Penyaring JSON Agresif
+	// AI seringkali menambah teks seperti "Tentu, ini hasilnya..." di depan JSON.
+	// Kami akan membuang semua teks tersebut secara paksa.
+	startIdx := strings.Index(responseText, "[")
+	endIdx := strings.LastIndex(responseText, "]")
+
+	if startIdx == -1 || endIdx == -1 || endIdx <= startIdx {
+		fmt.Printf("❌ CRITICAL FAILURE: AI tidak memberikan format JSON array.\nRaw Output: %s\n", responseText)
+		return nil, fmt.Errorf("AI gagal memberikan data terstruktur. Silakan coba klik 'Generate' sekali lagi.")
+	}
+
+	// Ambil hanya bongkahan JSON-nya saja
+	sanitizedJSON := responseText[startIdx : endIdx+1]
+
 	var risks []models.GeneratedRisk
-	if err := json.Unmarshal([]byte(responseText), &risks); err != nil {
-		fmt.Printf("❌ JSON Parse Error: %v\nRaw Text: %s\n", err, responseText)
-		
-		// Attempt one more recovery: find the first '[' and last ']'
-		start := strings.Index(responseText, "[")
-		end := strings.LastIndex(responseText, "]")
-		if start != -1 && end != -1 && end > start {
-			recovered := responseText[start : end+1]
-			if errRec := json.Unmarshal([]byte(recovered), &risks); errRec == nil {
-				fmt.Println("✅ Recovered JSON via bracket extraction!")
-				return risks, nil
-			}
-		}
-		
-		return nil, fmt.Errorf("AI menghasilkan format JSON yang tidak valid. Silakan coba Generate ulang.")
+	if err := json.Unmarshal([]byte(sanitizedJSON), &risks); err != nil {
+		fmt.Printf("❌ JSON Parse Error: %v\nExtracted: %s\n", err, sanitizedJSON)
+		return nil, fmt.Errorf("Format data tidak sesuai standar syariah. Mohon coba lagi.")
 	}
 
 	return risks, nil

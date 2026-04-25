@@ -127,16 +127,24 @@ func ensureSchemaUpdates() {
 		}
 	}
 
-	// 4. Add Context field
-	var ctxExists bool
-	ctxQuery := "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='risks' AND column_name='context')"
-	err = DB.QueryRow(ctxQuery).Scan(&ctxExists)
-	if err == nil && !ctxExists {
-		_, err := DB.Exec("ALTER TABLE risks ADD COLUMN context VARCHAR(100)")
-		if err != nil {
-			log.Println("Error adding context column:", err)
-		} else {
-			fmt.Println("Migrated: Added context to risks")
+	// 4. Add Context, Confidence, and Reasoning fields
+	extraCols := map[string]string{
+		"context":          "VARCHAR(100)",
+		"confidence_score": "FLOAT",
+		"reasoning":        "TEXT",
+	}
+
+	for colName, colType := range extraCols {
+		var colExists bool
+		query := fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='risks' AND column_name='%s')", colName)
+		err := DB.QueryRow(query).Scan(&colExists)
+		if err == nil && !colExists {
+			_, err := DB.Exec(fmt.Sprintf("ALTER TABLE risks ADD COLUMN %s %s", colName, colType))
+			if err != nil {
+				log.Printf("Error adding %s column: %v", colName, err)
+			} else {
+				fmt.Printf("Migrated: Added %s to risks\n", colName)
+			}
 		}
 	}
 	// 5. Add created_at field
@@ -324,16 +332,16 @@ func GetMetrics(lazID int) ([]models.Metric, error) {
 }
 
 func GetRisks(lazID int) ([]models.Risk, error) {
-	rows, err := DB.Query("SELECT id, description, category, impact, likelihood, status, COALESCE(mitigation_plan, ''), COALESCE(mitigation_status, 'Planned'), COALESCE(mitigation_progress, 0), COALESCE(context, ''), COALESCE(to_char(created_at, 'YYYY-MM-DD HH24:MI:SS'), '') FROM risks WHERE laz_id=$1 ORDER BY created_at DESC", lazID)
+	rows, err := DB.Query("SELECT id, description, category, impact, likelihood, status, COALESCE(mitigation_plan, ''), COALESCE(mitigation_status, 'Planned'), COALESCE(mitigation_progress, 0), COALESCE(context, ''), COALESCE(to_char(created_at, 'YYYY-MM-DD HH24:MI:SS'), ''), COALESCE(confidence_score, 0), COALESCE(reasoning, '') FROM risks WHERE laz_id=$1 ORDER BY created_at DESC", lazID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
+ 
 	var risks []models.Risk
 	for rows.Next() {
 		var r models.Risk
-		if err := rows.Scan(&r.ID, &r.Description, &r.Category, &r.Impact, &r.Likelihood, &r.Status, &r.MitigationPlan, &r.MitigationStatus, &r.MitigationProgress, &r.Context, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Description, &r.Category, &r.Impact, &r.Likelihood, &r.Status, &r.MitigationPlan, &r.MitigationStatus, &r.MitigationProgress, &r.Context, &r.CreatedAt, &r.ConfidenceScore, &r.Reasoning); err != nil {
 			return nil, err
 		}
 		r.LazID = lazID
@@ -342,14 +350,14 @@ func GetRisks(lazID int) ([]models.Risk, error) {
 	return risks, nil
 }
 
-func CreateRisk(risk models.Risk) error {
+func CreateRisk(risk *models.Risk) error {
 	// Jika ID kosong (dari AI atau New Manual), generate ID unik berdasarkan nanodetik
 	if risk.ID == "" {
 		risk.ID = fmt.Sprintf("AI-%d", time.Now().UnixNano())
 	}
 
-	query := `INSERT INTO risks (id, laz_id, description, category, impact, likelihood, status, mitigation_plan, mitigation_status, mitigation_progress, context) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
-	_, err := DB.Exec(query, risk.ID, risk.LazID, risk.Description, risk.Category, risk.Impact, risk.Likelihood, risk.Status, risk.MitigationPlan, risk.MitigationStatus, risk.MitigationProgress, risk.Context)
+	query := `INSERT INTO risks (id, laz_id, description, category, impact, likelihood, status, mitigation_plan, mitigation_status, mitigation_progress, context, confidence_score, reasoning) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
+	_, err := DB.Exec(query, risk.ID, risk.LazID, risk.Description, risk.Category, risk.Impact, risk.Likelihood, risk.Status, risk.MitigationPlan, risk.MitigationStatus, risk.MitigationProgress, risk.Context, risk.ConfidenceScore, risk.Reasoning)
 	return err
 }
 

@@ -9,6 +9,7 @@ import (
 	"backend/db"
 	"backend/models"
 	"backend/services"
+	"time"
 )
 
 // Injected dependencies
@@ -36,10 +37,12 @@ func CreateRisk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	risk.LazID = lazID // Force the LazID to match context
-	if err := db.CreateRisk(risk); err != nil {
+	if err := db.CreateRisk(&risk); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Note: created_at in db is set to CURRENT_TIMESTAMP, let's mock it for the frontend
+	risk.CreatedAt = time.Now().Format("2006-01-02 15:04:05")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(risk)
 }
@@ -89,26 +92,38 @@ func GenerateRisks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback prompt if config is missing
+	// Peningkatan Keamanan Fikih: Prompt yang lebih ketat dengan Confidence Score
 	activePromptCfg := PromptCfg
 	if activePromptCfg == nil || activePromptCfg.AnalysisPrompt == "" {
-		fmt.Println("⚠️  Prompt Config missing, using hardcoded fallback.")
 		activePromptCfg = &config.PromptConfig{
-			SystemInstruction: "Anda adalah auditor risiko syariah. Output hanya JSON array.",
-			AnalysisPrompt:    "Analisis risiko untuk kegiatan: {{.EventType}}. Output JSON array of objects with fields: id, category, description, impact, likelihood, status, confidenceScore, violationType, reasoning, suggestedMitigation.",
+			// Kita pindahkan instruksi ke AnalysisPrompt agar kompatibel dengan model lama
+			AnalysisPrompt: "INSTRUKSI PAKAR: Anda adalah pakar Audit Risiko Syariah. Analisis kepatuhan syariah dengan sangat teliti.\n" +
+				"KEGIATAN: {{.EventType}}\n" +
+				"FORMAT OUTPUT: HARUS BERUPA VALID JSON ARRAY OF OBJECTS (Tanpa teks penjelasan lain di luar JSON).\n" +
+				"FIELD: id, category, description, impact, likelihood, status, confidenceScore, violationType, reasoning, suggestedMitigation.\n" +
+				"ATURAN: \n1. confidenceScore (0.0 - 1.0).\n2. Reasoning merujuk Maqashid Shariah.\n3. Skor < 0.7 untuk kasus ambigu.",
 		}
 	}
+	// AUDIT ULTRASONIK: Paksa kosongkan SystemInstruction agar tidak bentrok dengan model lama
+	// (Abaikan settingan database jika ada demi stabilitas API)
+	activePromptCfg.SystemInstruction = ""
 
 	risks, err := GeminiSvc.GenerateRisks(lazID, req.EventType, activePromptCfg)
 	if err != nil {
-		fmt.Printf("❌ Gemini Error: %v\n", err) // Add logging
+		fmt.Printf("❌ Gemini Error: %v\n", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Populate Context for each generated risk
+	// Logika Audit & Eskalasi Otomatis (Anti-Halusinasi)
 	for i := range risks {
 		risks[i].Context = req.EventType
+		
+		// Jika skor di bawah 0.85, tandai sebagai kritis/butuh tinjauan manual (Escalation Required)
+		if risks[i].ConfidenceScore < 0.85 {
+			risks[i].Status = "ESC_REQUIRED"
+			risks[i].Reasoning = "[⚠️ POTENSI HALUSINASI] " + risks[i].Reasoning
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

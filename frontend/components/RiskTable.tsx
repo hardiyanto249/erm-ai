@@ -106,6 +106,7 @@ const RiskTable: React.FC<RiskTableProps> = ({ risks, isCompact = false, onEdit,
             <th scope="col" className="px-6 py-3">Impact</th>
             {!isCompact && <th scope="col" className="px-6 py-3">Likelihood</th>}
             {!isCompact && <th scope="col" className="px-6 py-3">Mitigation</th>}
+            <th scope="col" className="px-6 py-3 text-center">Integritas AI</th>
             <th scope="col" className="px-6 py-3">Status</th>
             {!isCompact && hasActions && <th scope="col" className="px-6 py-3 text-center">Actions</th>}
           </tr>
@@ -113,7 +114,7 @@ const RiskTable: React.FC<RiskTableProps> = ({ risks, isCompact = false, onEdit,
         <tbody>
           {sortedRisks.length === 0 ? (
             <tr>
-              <td colSpan={isCompact ? 3 : (hasActions ? 10 : 9)} className="text-center py-8 text-gray-500">No risks to display.</td>
+              <td colSpan={isCompact ? 4 : (hasActions ? 11 : 10)} className="text-center py-8 text-gray-500">No risks to display.</td>
             </tr>
           ) : (
             sortedRisks.map((risk) => (
@@ -141,9 +142,27 @@ const RiskTable: React.FC<RiskTableProps> = ({ risks, isCompact = false, onEdit,
                   </td>
                 )}
                 <td className="px-6 py-4">
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="text-[10px] text-gray-500 font-mono">
+                      {(risk.confidence_score ? (risk.confidence_score * 100).toFixed(0) : '0')}% Confidence
+                    </div>
+                    <div className="w-20 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full transition-all ${
+                          (risk.confidence_score || 0) > 0.85 ? 'bg-blue-500' : 'bg-orange-500 animate-pulse'
+                        }`}
+                        style={{ width: `${(risk.confidence_score || 0) * 100}%` }}
+                      ></div>
+                    </div>
+                    {risk.status === 'ESC_REQUIRED' && (
+                      <span className="mt-1 px-1.5 py-0.5 bg-orange-500/20 text-orange-500 border border-orange-500/30 text-[9px] rounded font-bold">🚨 ESKALASI</span>
+                    )}
+                  </div>
+                </td>
+                <td className="px-6 py-4">
                   <div className="flex items-center">
                     <div className={`h-2.5 w-2.5 rounded-full ${getStatusColor(risk.status)} mr-2`}></div>
-                    {risk.status}
+                    {risk.status === 'ESC_REQUIRED' ? 'Butuh Review' : risk.status}
                   </div>
                 </td>
                 {!isCompact && hasActions && (

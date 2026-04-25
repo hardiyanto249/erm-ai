@@ -19,6 +19,7 @@ interface GeneratedRisk {
   likelihood: string;
   status: string;
   reasoning: string;
+  confidenceScore: number; // Tambahkan ini
   context?: string;
 }
 
@@ -104,6 +105,8 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
           likelihood: (gen.likelihood in RiskLikelihood) ? gen.likelihood as keyof typeof RiskLikelihood : 'Low',
           status: 'Open',
           context: gen.context || eventType,
+          confidence_score: gen.confidenceScore, // ANGKUT SKOR AI
+          reasoning: gen.reasoning,              // ANGKUT ALASAN SYARIAH
         };
         risksToSave.push(newRisk);
       }
@@ -129,6 +132,7 @@ const LogRiskModal: React.FC<LogRiskModalProps> = ({ onClose, onSave, riskToEdit
     setError(null);
 
     const newRisk: RiskItem = {
+      ...(isEditMode && riskToEdit ? riskToEdit : {}), // Preserve existing fields like mitigation data
       id: isEditMode && riskToEdit ? riskToEdit.id : '', // Empty ID for new, existing ID for update
       description,
       context,

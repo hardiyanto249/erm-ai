@@ -114,7 +114,8 @@ const App: React.FC = () => {
             body: JSON.stringify(riskToSave)
           });
           if (!res.ok) throw new Error(`Failed to update risk ${riskToSave.id}`);
-          savedRisks.push(riskToSave);
+          const saved = await res.json();
+          savedRisks.push(saved);
         } else {
           const res = await fetch(`${API_BASE_URL}/api/risks`, {
             method: 'POST',
@@ -122,7 +123,8 @@ const App: React.FC = () => {
             body: JSON.stringify(riskToSave)
           });
           if (!res.ok) throw new Error(`Failed to create risk ${riskToSave.id}`);
-          savedRisks.push(riskToSave);
+          const saved = await res.json();
+          savedRisks.push(saved);
         }
       }
 
